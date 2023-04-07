@@ -6,6 +6,7 @@ export {
   GraphQL,
   Mongo,
   Mysql,
+  Mysql2,
   Postgres,
   Prisma,
   lazyLoadedNodePerformanceMonitoringIntegrations,

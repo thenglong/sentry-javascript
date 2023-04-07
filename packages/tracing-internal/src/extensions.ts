@@ -30,6 +30,12 @@ function _autoloadDatabaseIntegrations(): void {
       };
       return new integration.Mysql();
     },
+    mysql2() {
+      const integration = dynamicRequire(module, './node/integrations/mysql2') as {
+        Mysql2: IntegrationClass<Integration>;
+      };
+      return new integration.Mysql2();
+    },
     pg() {
       const integration = dynamicRequire(module, './node/integrations/postgres') as {
         Postgres: IntegrationClass<Integration>;

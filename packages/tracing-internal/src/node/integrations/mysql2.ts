@@ -1,13 +1,16 @@
 import type { Hub } from '@sentry/core';
-import type { EventProcessor, Integration } from '@sentry/types';
+import type { EventProcessor } from '@sentry/types';
 import { fill, loadModule, logger } from '@sentry/utils';
+
+import type { LazyLoadedIntegration } from './lazy';
+import { shouldDisableAutoInstrumentation } from './utils/node-utils';
 
 interface Mysql2Connection {
   createQuery: () => void;
 }
 
 /** Tracing integration for node-mysql2 package */
-export class Mysql2 implements Integration {
+export class Mysql2 implements LazyLoadedIntegration<Mysql2Connection> {
   /**
    * @inheritDoc
    */
@@ -18,11 +21,23 @@ export class Mysql2 implements Integration {
    */
   public name: string = Mysql2.id;
 
+  private _module?: Mysql2Connection;
+
+  /** @inheritdoc */
+  public loadDependency(): Mysql2Connection | undefined {
+    return (this._module = this._module || loadModule('mysql2/lib/connection.js'));
+  }
+
   /**
    * @inheritDoc
    */
   public setupOnce(_: (callback: EventProcessor) => void, getCurrentHub: () => Hub): void {
-    const pkg = loadModule<Mysql2Connection>('mysql2/lib/connection.js');
+    if (shouldDisableAutoInstrumentation(getCurrentHub)) {
+      __DEBUG_BUILD__ && logger.log('Mysql2 Integration is skipped because of instrumenter configuration.');
+      return;
+    }
+
+    const pkg = this.loadDependency();
 
     if (!pkg) {
       logger.error('Mysql2 Integration was unable to require `mysql2` package.');

@@ -1,6 +1,6 @@
 import type { GLOBAL_OBJ } from '@sentry/utils';
 import type { SentryCliPluginOptions } from '@sentry/webpack-plugin';
-import type { WebpackPluginInstance } from 'webpack';
+import type { DefinePlugin, WebpackPluginInstance } from 'webpack';
 
 export type SentryWebpackPluginOptions = SentryCliPluginOptions;
 export type SentryWebpackPlugin = WebpackPluginInstance & { options: SentryWebpackPluginOptions };
@@ -128,6 +128,18 @@ export type UserSentryOptions = {
    * NOTE: This feature only works with Next.js 11+
    */
   tunnelRoute?: string;
+
+  /**
+   * Tree shakes Sentry SDK logger statements from the bundle.
+   */
+  disableLogger?: boolean;
+
+  /**
+   * Automatically create cron monitors in Sentry for your Vercel Cron Jobs if configured via `vercel.json`.
+   *
+   * Defaults to `true`.
+   */
+  automaticVercelMonitors?: boolean;
 };
 
 export type NextConfigFunction = (phase: string, defaults: { defaultConfig: NextConfigObject }) => NextConfigObject;
@@ -167,7 +179,10 @@ export type BuildContext = {
   dir: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: any;
-  webpack: { version: string };
+  webpack: {
+    version: string;
+    DefinePlugin: typeof DefinePlugin;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   defaultLoaders: any;
   totalPages: number;

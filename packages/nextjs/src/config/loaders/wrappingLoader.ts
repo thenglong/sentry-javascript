@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { rollup } from 'rollup';
 
+import type { VercelCronsConfig } from '../../common/types';
 import type { LoaderThis } from './types';
 
 // Just a simple placeholder to make referencing module consistent
@@ -43,6 +44,8 @@ type LoaderOptions = {
   pageExtensionRegex: string;
   excludeServerRoutes: Array<RegExp | string>;
   wrappingTargetKind: 'page' | 'api-route' | 'middleware' | 'server-component';
+  sentryConfigFilePath?: string;
+  vercelCronsConfig?: VercelCronsConfig;
 };
 
 function moduleExists(id: string): boolean {
@@ -59,6 +62,7 @@ function moduleExists(id: string): boolean {
  * any data-fetching functions (`getInitialProps`, `getStaticProps`, and `getServerSideProps`) or API routes it contains
  * are wrapped, and then everything is re-exported.
  */
+// eslint-disable-next-line complexity
 export default function wrappingLoader(
   this: LoaderThis<LoaderOptions>,
   userCode: string,
@@ -71,6 +75,8 @@ export default function wrappingLoader(
     pageExtensionRegex,
     excludeServerRoutes = [],
     wrappingTargetKind,
+    sentryConfigFilePath,
+    vercelCronsConfig,
   } = 'getOptions' in this ? this.getOptions() : this.query;
 
   this.async();
@@ -109,6 +115,8 @@ export default function wrappingLoader(
     } else {
       throw new Error(`Invariant: Could not get template code of unknown kind "${wrappingTargetKind}"`);
     }
+
+    templateCode = templateCode.replace(/__VERCEL_CRONS_CONFIGURATION__/g, JSON.stringify(vercelCronsConfig));
 
     // Inject the route and the path to the file we're wrapping into the template
     templateCode = templateCode.replace(/__ROUTE__/g, parameterizedPagesRoute.replace(/\\/g, '\\\\'));
@@ -192,6 +200,15 @@ export default function wrappingLoader(
       templateCode = templateCode.replace(/__COMPONENT_TYPE__/g, componentType);
     } else {
       templateCode = templateCode.replace(/__COMPONENT_TYPE__/g, 'Unknown');
+    }
+
+    // We check whether `this.resourcePath` is absolute because there is no contract by webpack that says it is absolute,
+    // however we can only create relative paths to the sentry config from absolute paths.Examples where this could possibly be non - absolute are virtual modules.
+    if (sentryConfigFilePath && path.isAbsolute(this.resourcePath)) {
+      const sentryConfigImportPath = path
+        .relative(path.dirname(this.resourcePath), sentryConfigFilePath) // Absolute paths do not work with Windows: https://github.com/getsentry/sentry-javascript/issues/8133
+        .replace(/\\/g, '/');
+      templateCode = `import "${sentryConfigImportPath}";\n`.concat(templateCode);
     }
   } else if (wrappingTargetKind === 'middleware') {
     templateCode = middlewareWrapperTemplateCode;

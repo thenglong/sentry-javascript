@@ -7,6 +7,7 @@ import * as chalk from 'chalk';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import type { VercelCronsConfig } from '../common/types';
 // Note: If you need to import a type from Webpack, do it in `types.ts` and export it from there. Otherwise, our
 // circular dependency check thinks this file is importing from itself. See https://github.com/pahen/madge/issues/306.
 import type {
@@ -23,8 +24,8 @@ import type {
 } from './types';
 
 const RUNTIME_TO_SDK_ENTRYPOINT_MAP = {
-  browser: './client',
-  node: './server',
+  client: './client',
+  server: './server',
   edge: './edge',
 } as const;
 
@@ -64,7 +65,7 @@ export function constructWebpackConfigFunction(
     buildContext: BuildContext,
   ): WebpackConfigObject {
     const { isServer, dev: isDev, dir: projectDir } = buildContext;
-    const runtime = isServer ? (buildContext.nextRuntime === 'edge' ? 'edge' : 'node') : 'browser';
+    const runtime = isServer ? (buildContext.nextRuntime === 'edge' ? 'edge' : 'server') : 'client';
 
     let rawNewConfig = { ...incomingConfig };
 
@@ -124,6 +125,7 @@ export function constructWebpackConfigFunction(
       pagesDir: pagesDirPath,
       pageExtensionRegex,
       excludeServerRoutes: userSentryOptions.excludeServerRoutes,
+      sentryConfigFilePath: getUserConfigFilePath(projectDir, runtime),
     };
 
     const normalizeLoaderResourcePath = (resourcePath: string): string => {
@@ -162,6 +164,31 @@ export function constructWebpackConfigFunction(
         ],
       });
 
+      let vercelCronsConfig: VercelCronsConfig = undefined;
+      try {
+        if (process.env.VERCEL && userSentryOptions.automaticVercelMonitors !== false) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          vercelCronsConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')).crons;
+          if (vercelCronsConfig) {
+            logger.info(
+              `${chalk.cyan(
+                'info',
+              )} - Creating Sentry cron monitors for your Vercel Cron Jobs. You can disable this feature by setting the ${chalk.bold.cyan(
+                'automaticVercelMonitors',
+              )} option to false in you Next.js config.`,
+            );
+          }
+        }
+      } catch (e) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        if (e.code === 'ENOENT') {
+          // noop if file does not exist
+        } else {
+          // log but noop
+          logger.error(`${chalk.red('error')} - Sentry failed to read vercel.json`, e);
+        }
+      }
+
       // Wrap api routes
       newConfig.module.rules.unshift({
         test: resourcePath => {
@@ -176,6 +203,7 @@ export function constructWebpackConfigFunction(
             loader: path.resolve(__dirname, 'loaders', 'wrappingLoader.js'),
             options: {
               ...staticWrappingLoaderOptions,
+              vercelCronsConfig,
               wrappingTargetKind: 'api-route',
             },
           },
@@ -285,13 +313,22 @@ export function constructWebpackConfigFunction(
         // front-end-only problem, and because `sentry-cli` handles sourcemaps more reliably with the comment than
         // without, the option to use `hidden-source-map` only applies to the client-side build.
         newConfig.devtool = userSentryOptions.hideSourceMaps && !isServer ? 'hidden-source-map' : 'source-map';
-      }
 
+        newConfig.plugins = newConfig.plugins || [];
+        newConfig.plugins.push(
+          new SentryWebpackPlugin(
+            getWebpackPluginOptions(buildContext, userSentryWebpackPluginOptions, userSentryOptions),
+          ),
+        );
+      }
+    }
+
+    if (userSentryOptions.disableLogger) {
       newConfig.plugins = newConfig.plugins || [];
       newConfig.plugins.push(
-        new SentryWebpackPlugin(
-          getWebpackPluginOptions(buildContext, userSentryWebpackPluginOptions, userSentryOptions),
-        ),
+        new buildContext.webpack.DefinePlugin({
+          __SENTRY_DEBUG__: false,
+        }),
       );
     }
 
@@ -453,6 +490,22 @@ export function getUserConfigFile(projectDir: string, platform: 'server' | 'clie
 }
 
 /**
+ * Gets the absolute path to a sentry config file for a particular platform. Returns `undefined` if it doesn't exist.
+ */
+export function getUserConfigFilePath(projectDir: string, platform: 'server' | 'client' | 'edge'): string | undefined {
+  const possibilities = [`sentry.${platform}.config.ts`, `sentry.${platform}.config.js`];
+
+  for (const filename of possibilities) {
+    const configPath = path.resolve(projectDir, filename);
+    if (fs.existsSync(configPath)) {
+      return configPath;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Add files to a specific element of the given `entry` webpack config property.
  *
  * @param entryProperty The existing `entry` config object
@@ -584,7 +637,7 @@ export function getWebpackPluginOptions(
   userPluginOptions: Partial<SentryWebpackPluginOptions>,
   userSentryOptions: UserSentryOptions,
 ): SentryWebpackPluginOptions {
-  const { buildId, isServer, webpack, config, dev: isDev, dir: projectDir } = buildContext;
+  const { buildId, isServer, webpack, config, dir: projectDir } = buildContext;
   const userNextConfig = config as NextConfigObject;
 
   const distDirAbsPath = path.resolve(projectDir, userNextConfig.distDir || '.next'); // `.next` is the default directory
@@ -628,7 +681,6 @@ export function getWebpackPluginOptions(
     urlPrefix,
     entries: [], // The webpack plugin's release injection breaks the `app` directory - we inject the release manually with the value injection loader instead.
     release: getSentryRelease(buildId),
-    dryRun: isDev,
   });
 
   checkWebpackPluginOverrides(defaultPluginOptions, userPluginOptions);
@@ -733,7 +785,7 @@ export function getWebpackPluginOptions(
 
 /** Check various conditions to decide if we should run the plugin */
 function shouldEnableWebpackPlugin(buildContext: BuildContext, userSentryOptions: UserSentryOptions): boolean {
-  const { isServer, dev: isDev } = buildContext;
+  const { isServer } = buildContext;
   const { disableServerWebpackPlugin, disableClientWebpackPlugin } = userSentryOptions;
 
   /** Non-negotiable */
@@ -758,18 +810,6 @@ function shouldEnableWebpackPlugin(buildContext: BuildContext, userSentryOptions
     return !disableClientWebpackPlugin;
   }
 
-  /** Situations where the default is to disable the plugin */
-
-  // TODO: Are there analogs to Vercel's preveiw and dev modes on other deployment platforms?
-
-  if (isDev || process.env.NODE_ENV === 'development') {
-    // TODO (v8): Right now in dev we set the plugin to dryrun mode, and our boilerplate includes setting the plugin to
-    // `silent`, so for the vast majority of users, it's as if the plugin doesn't run at all in dev. Making that
-    // official is technically a breaking change, though, so we probably should wait until v8.
-    // return false
-  }
-
-  // We've passed all of the tests!
   return true;
 }
 
@@ -855,7 +895,8 @@ function addValueInjectionLoader(
     __sentryRewritesTunnelPath__: userSentryOptions.tunnelRoute,
 
     // The webpack plugin's release injection breaks the `app` directory so we inject the release manually here instead.
-    SENTRY_RELEASE: { id: getSentryRelease(buildContext.buildId) },
+    // Having a release defined in dev-mode spams releases in Sentry so we only set one in non-dev mode
+    SENTRY_RELEASE: buildContext.dev ? undefined : { id: getSentryRelease(buildContext.buildId) },
   };
 
   const serverValues = {

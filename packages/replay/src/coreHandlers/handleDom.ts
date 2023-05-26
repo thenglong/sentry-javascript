@@ -3,19 +3,32 @@ import { NodeType } from '@sentry-internal/rrweb-snapshot';
 import type { Breadcrumb } from '@sentry/types';
 import { htmlTreeAsString } from '@sentry/utils';
 
-import type { ReplayContainer } from '../types';
+import type { ReplayContainer, SlowClickConfig } from '../types';
 import { createBreadcrumb } from '../util/createBreadcrumb';
+import { detectSlowClick } from './handleSlowClick';
 import { addBreadcrumbEvent } from './util/addBreadcrumbEvent';
 import { getAttributesToRecord } from './util/getAttributesToRecord';
 
-interface DomHandlerData {
+export interface DomHandlerData {
   name: string;
-  event: Node | { target: Node };
+  event: Node | { target: EventTarget };
 }
 
-export const handleDomListener: (replay: ReplayContainer) => (handlerData: DomHandlerData) => void =
-  (replay: ReplayContainer) =>
-  (handlerData: DomHandlerData): void => {
+export const handleDomListener: (replay: ReplayContainer) => (handlerData: DomHandlerData) => void = (
+  replay: ReplayContainer,
+) => {
+  const slowClickExperiment = replay.getOptions()._experiments.slowClicks;
+
+  const slowClickConfig: SlowClickConfig | undefined = slowClickExperiment
+    ? {
+        threshold: slowClickExperiment.threshold,
+        timeout: slowClickExperiment.timeout,
+        scrollTimeout: slowClickExperiment.scrollTimeout,
+        ignoreSelector: slowClickExperiment.ignoreSelectors ? slowClickExperiment.ignoreSelectors.join(',') : '',
+      }
+    : undefined;
+
+  return (handlerData: DomHandlerData): void => {
     if (!replay.isEnabled()) {
       return;
     }
@@ -26,39 +39,37 @@ export const handleDomListener: (replay: ReplayContainer) => (handlerData: DomHa
       return;
     }
 
+    const isClick = handlerData.name === 'click';
+    const event = isClick && (handlerData.event as PointerEvent);
+    // Ignore clicks if ctrl/alt/meta keys are held down as they alter behavior of clicks (e.g. open in new tab)
+    if (isClick && slowClickConfig && event && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      detectSlowClick(
+        replay,
+        slowClickConfig,
+        result as Breadcrumb & { timestamp: number },
+        getClickTargetNode(handlerData.event) as HTMLElement,
+      );
+    }
+
     addBreadcrumbEvent(replay, result);
   };
+};
 
-/**
- * An event handler to react to DOM events.
- */
-function handleDom(handlerData: DomHandlerData): Breadcrumb | null {
-  let target;
-  let targetNode: Node | INode | undefined;
-
-  // Accessing event.target can throw (see getsentry/raven-js#838, #768)
-  try {
-    targetNode = getTargetNode(handlerData);
-    target = htmlTreeAsString(targetNode);
-  } catch (e) {
-    target = '<unknown>';
-  }
-
+/** Get the base DOM breadcrumb. */
+export function getBaseDomBreadcrumb(target: Node | INode | null, message: string): Breadcrumb {
   // `__sn` property is the serialized node created by rrweb
-  const serializedNode =
-    targetNode && '__sn' in targetNode && targetNode.__sn.type === NodeType.Element ? targetNode.__sn : null;
+  const serializedNode = target && isRrwebNode(target) && target.__sn.type === NodeType.Element ? target.__sn : null;
 
-  return createBreadcrumb({
-    category: `ui.${handlerData.name}`,
-    message: target,
+  return {
+    message,
     data: serializedNode
       ? {
           nodeId: serializedNode.id,
           node: {
             id: serializedNode.id,
             tagName: serializedNode.tagName,
-            textContent: targetNode
-              ? Array.from(targetNode.childNodes)
+            textContent: target
+              ? Array.from(target.childNodes)
                   .map(
                     (node: Node | INode) => '__sn' in node && node.__sn.type === NodeType.Text && node.__sn.textContent,
                   )
@@ -70,17 +81,68 @@ function handleDom(handlerData: DomHandlerData): Breadcrumb | null {
           },
         }
       : {},
+  };
+}
+
+/**
+ * An event handler to react to DOM events.
+ * Exported for tests.
+ */
+export function handleDom(handlerData: DomHandlerData): Breadcrumb | null {
+  const { target, message } = getDomTarget(handlerData);
+
+  return createBreadcrumb({
+    category: `ui.${handlerData.name}`,
+    ...getBaseDomBreadcrumb(target, message),
   });
 }
 
-function getTargetNode(handlerData: DomHandlerData): Node {
-  if (isEventWithTarget(handlerData.event)) {
-    return handlerData.event.target;
+function getDomTarget(handlerData: DomHandlerData): { target: Node | INode | null; message: string } {
+  const isClick = handlerData.name === 'click';
+
+  let message: string | undefined;
+  let target: Node | INode | null = null;
+
+  // Accessing event.target can throw (see getsentry/raven-js#838, #768)
+  try {
+    target = isClick ? getClickTargetNode(handlerData.event) : getTargetNode(handlerData.event);
+    message = htmlTreeAsString(target, { maxStringLength: 200 }) || '<unknown>';
+  } catch (e) {
+    message = '<unknown>';
   }
 
-  return handlerData.event;
+  return { target, message };
 }
 
-function isEventWithTarget(event: unknown): event is { target: Node } {
-  return !!(event as { target?: Node }).target;
+function isRrwebNode(node: EventTarget): node is INode {
+  return '__sn' in node;
+}
+
+function getTargetNode(event: Node | { target: EventTarget | null }): Node | INode | null {
+  if (isEventWithTarget(event)) {
+    return event.target as Node | null;
+  }
+
+  return event;
+}
+
+const INTERACTIVE_SELECTOR = 'button,a';
+
+// For clicks, we check if the target is inside of a button or link
+// If so, we use this as the target instead
+// This is useful because if you click on the image in <button><img></button>,
+// The target will be the image, not the button, which we don't want here
+function getClickTargetNode(event: DomHandlerData['event']): Node | INode | null {
+  const target = getTargetNode(event);
+
+  if (!target || !(target instanceof Element)) {
+    return target;
+  }
+
+  const closestInteractive = target.closest(INTERACTIVE_SELECTOR);
+  return closestInteractive || target;
+}
+
+function isEventWithTarget(event: unknown): event is { target: EventTarget | null } {
+  return typeof event === 'object' && !!event && 'target' in event;
 }

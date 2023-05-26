@@ -56,6 +56,9 @@ conditionalTest({ min: 16 })('Undici integration', () => {
       {
         description: 'GET http://localhost:18099/',
         op: 'http.client',
+        data: {
+          'http.method': 'GET',
+        },
       },
     ],
     [
@@ -66,6 +69,7 @@ conditionalTest({ min: 16 })('Undici integration', () => {
         description: 'GET http://localhost:18099/',
         op: 'http.client',
         data: {
+          'http.method': 'GET',
           'http.query': '?foo=bar',
         },
       },
@@ -76,6 +80,9 @@ conditionalTest({ min: 16 })('Undici integration', () => {
       { method: 'POST' },
       {
         description: 'POST http://localhost:18099/',
+        data: {
+          'http.method': 'POST',
+        },
       },
     ],
     [
@@ -84,6 +91,9 @@ conditionalTest({ min: 16 })('Undici integration', () => {
       { method: 'POST' },
       {
         description: 'POST http://localhost:18099/',
+        data: {
+          'http.method': 'POST',
+        },
       },
     ],
     [
@@ -119,6 +129,25 @@ conditionalTest({ min: 16 })('Undici integration', () => {
     expect(transaction.spanRecorder?.spans.length).toBe(2);
 
     const span = transaction.spanRecorder?.spans[1];
+    expect(span).toEqual(expect.objectContaining({ status: 'internal_error' }));
+  });
+
+  it('creates a span for invalid looking urls', async () => {
+    const transaction = hub.startTransaction({ name: 'test-transaction' }) as Transaction;
+    hub.getScope().setSpan(transaction);
+
+    try {
+      // Intentionally add // to the url
+      // fetch accepts this URL, but throws an error later on
+      await fetch('http://a-url-that-no-exists.com//');
+    } catch (e) {
+      // ignore
+    }
+
+    expect(transaction.spanRecorder?.spans.length).toBe(2);
+
+    const span = transaction.spanRecorder?.spans[1];
+    expect(span).toEqual(expect.objectContaining({ description: 'GET http://a-url-that-no-exists.com//' }));
     expect(span).toEqual(expect.objectContaining({ status: 'internal_error' }));
   });
 

@@ -6,6 +6,7 @@ import { captureException } from '@sentry/svelte';
 import type { ClientOptions, SanitizedRequestData } from '@sentry/types';
 import {
   addExceptionMechanism,
+  addNonEnumerableProperty,
   getSanitizedUrlString,
   objectify,
   parseFetchArgs,
@@ -14,7 +15,10 @@ import {
 } from '@sentry/utils';
 import type { LoadEvent } from '@sveltejs/kit';
 
+import type { SentryWrappedFlag } from '../common/utils';
 import { isRedirect } from '../common/utils';
+
+type PatchedLoadEvent = LoadEvent & Partial<SentryWrappedFlag>;
 
 function sendErrorToSentry(e: unknown): unknown {
   // In case we have a primitive, wrap it in the equivalent wrapper class (string -> String, etc.) so that we can
@@ -66,12 +70,19 @@ export function wrapLoadWithSentry<T extends (...args: any) => any>(origLoad: T)
   return new Proxy(origLoad, {
     apply: (wrappingTarget, thisArg, args: Parameters<T>) => {
       // Type casting here because `T` cannot extend `Load` (see comment above function signature)
-      const event = args[0] as LoadEvent;
+      const event = args[0] as PatchedLoadEvent;
 
-      const patchedEvent = {
+      // Check if already wrapped
+      if (event.__sentry_wrapped__) {
+        return wrappingTarget.apply(thisArg, args);
+      }
+
+      const patchedEvent: PatchedLoadEvent = {
         ...event,
         fetch: instrumentSvelteKitFetch(event.fetch),
       };
+
+      addNonEnumerableProperty(patchedEvent as unknown as Record<string, unknown>, '__sentry_wrapped__', true);
 
       const routeId = event.route.id;
       return trace(
@@ -152,7 +163,7 @@ function instrumentSvelteKitFetch(originalFetch: SvelteKitFetch): SvelteKitFetch
 
       const requestData: SanitizedRequestData = {
         url: getSanitizedUrlString(urlObject),
-        method,
+        'http.method': method,
         ...(urlObject.search && { 'http.query': urlObject.search.substring(1) }),
         ...(urlObject.hash && { 'http.hash': urlObject.hash.substring(1) }),
       };
@@ -190,7 +201,7 @@ function instrumentSvelteKitFetch(originalFetch: SvelteKitFetch): SvelteKitFetch
       if (createSpan) {
         fetchPromise = trace(
           {
-            name: `${requestData.method} ${requestData.url}`, // this will become the description of the span
+            name: `${method} ${requestData.url}`, // this will become the description of the span
             op: 'http.client',
             data: requestData,
           },

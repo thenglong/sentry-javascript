@@ -10,7 +10,7 @@ export * from './edge';
 import type { Integration, Options, StackParser } from '@sentry/types';
 
 import type * as clientSdk from './client';
-import type { ServerComponentContext } from './common/types';
+import type { ServerComponentContext, VercelCronsConfig } from './common/types';
 import type * as edgeSdk from './edge';
 import type * as serverSdk from './server';
 
@@ -38,6 +38,8 @@ export declare const withErrorBoundary: typeof clientSdk.withErrorBoundary;
 
 export declare const Span: typeof edgeSdk.Span;
 export declare const Transaction: typeof edgeSdk.Transaction;
+
+export { withSentryConfig } from './config';
 
 /**
  * @deprecated Use `wrapApiHandlerWithSentry` instead
@@ -177,4 +179,12 @@ export declare function withSentryGetStaticProps<F extends (...args: any[]) => a
 export declare function wrapServerComponentWithSentry<F extends (...args: any[]) => any>(
   WrappingTarget: F,
   context: ServerComponentContext,
+): F;
+
+/**
+ * Wraps an `app` directory server component with Sentry error and performance instrumentation.
+ */
+export declare function wrapApiHandlerWithSentryVercelCrons<F extends (...args: any[]) => any>(
+  WrappingTarget: F,
+  vercelCronsConfig: VercelCronsConfig,
 ): F;

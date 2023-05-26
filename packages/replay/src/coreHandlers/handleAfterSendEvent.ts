@@ -1,7 +1,6 @@
 import { getCurrentHub } from '@sentry/core';
 import type { Event, Transport, TransportMakeRequestResponse } from '@sentry/types';
 
-import { UNABLE_TO_SEND_REPLAY } from '../constants';
 import type { ReplayContainer } from '../types';
 import { isErrorEvent, isTransactionEvent } from '../util/eventUtils';
 
@@ -41,31 +40,21 @@ export function handleAfterSendEvent(replay: ReplayContainer): AfterSendEventCal
       return;
     }
 
-    // Add error to list of errorIds of replay
+    // Add error to list of errorIds of replay. This is ok to do even if not
+    // sampled because context will get reset at next checkout.
+    // XXX: There is also a race condition where it's possible to capture an
+    // error to Sentry before Replay SDK has loaded, but response returns after
+    // it was loaded, and this gets called.
     if (event.event_id) {
       replay.getContext().errorIds.add(event.event_id);
     }
 
-    // Trigger error recording
+    // If error event is tagged with replay id it means it was sampled (when in buffer mode)
     // Need to be very careful that this does not cause an infinite loop
-    if (
-      replay.recordingMode === 'error' &&
-      event.exception &&
-      event.message !== UNABLE_TO_SEND_REPLAY // ignore this error because otherwise we could loop indefinitely with trying to capture replay and failing
-    ) {
-      setTimeout(async () => {
-        // Allow flush to complete before resuming as a session recording, otherwise
-        // the checkout from `startRecording` may be included in the payload.
-        // Prefer to keep the error replay as a separate (and smaller) segment
-        // than the session replay.
-        await replay.flushImmediate();
-
-        if (replay.stopRecording()) {
-          // Reset all "capture on error" configuration before
-          // starting a new recording
-          replay.recordingMode = 'session';
-          replay.startRecording();
-        }
+    if (replay.recordingMode === 'buffer' && event.tags && event.tags.replayId) {
+      setTimeout(() => {
+        // Capture current event buffer as new replay
+        void replay.sendBufferedReplayOrFlush();
       });
     }
   };

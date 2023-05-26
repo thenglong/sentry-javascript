@@ -1,5 +1,8 @@
+import { getSentryRelease } from '@sentry/node';
+import { escapeStringForRegex, uuid4 } from '@sentry/utils';
 import type { SentryVitePluginOptions } from '@sentry/vite-plugin';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
+import * as child_process from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 // @ts-ignore -sorcery has no types :(
@@ -7,14 +10,8 @@ import * as path from 'path';
 import * as sorcery from 'sorcery';
 import type { Plugin } from 'vite';
 
-const DEFAULT_PLUGIN_OPTIONS: SentryVitePluginOptions = {
-  // TODO: Read these values from the node adapter somehow as the out dir can be changed in the adapter options
-  include: [
-    { paths: ['build/client'] },
-    { paths: ['build/server/chunks'] },
-    { paths: ['build/server'], ignore: ['chunks/**'] },
-  ],
-};
+import { WRAPPED_MODULE_SUFFIX } from './autoInstrument';
+import { getAdapterOutputDir, loadSvelteConfig } from './svelteConfig';
 
 // sorcery has no types, so these are some basic type definitions:
 type Chain = {
@@ -28,6 +25,10 @@ type Sorcery = {
 type SentryVitePluginOptionsOptionalInclude = Omit<SentryVitePluginOptions, 'include'> & {
   include?: SentryVitePluginOptions['include'];
 };
+
+// storing this in the module scope because `makeCustomSentryVitePlugin` is called multiple times
+// and we only want to generate a uuid once in case we have to fall back to it.
+const release = detectSentryRelease();
 
 /**
  * Creates a new Vite plugin that uses the unplugin-based Sentry Vite plugin to create
@@ -45,22 +46,38 @@ type SentryVitePluginOptionsOptionalInclude = Omit<SentryVitePluginOptions, 'inc
  *
  * @returns the custom Sentry Vite plugin
  */
-export function makeCustomSentryVitePlugin(options?: SentryVitePluginOptionsOptionalInclude): Plugin {
+export async function makeCustomSentryVitePlugin(options?: SentryVitePluginOptionsOptionalInclude): Promise<Plugin> {
+  const svelteConfig = await loadSvelteConfig();
+
+  const outputDir = await getAdapterOutputDir(svelteConfig);
+  const hasSentryProperties = fs.existsSync(path.resolve(process.cwd(), 'sentry.properties'));
+
+  const defaultPluginOptions: SentryVitePluginOptions = {
+    include: [
+      { paths: [`${outputDir}/client`] },
+      { paths: [`${outputDir}/server/chunks`] },
+      { paths: [`${outputDir}/server`], ignore: ['chunks/**'] },
+    ],
+    configFile: hasSentryProperties ? 'sentry.properties' : undefined,
+    release,
+  };
+
   const mergedOptions = {
-    ...DEFAULT_PLUGIN_OPTIONS,
+    ...defaultPluginOptions,
     ...options,
   };
+
   const sentryPlugin: Plugin = sentryVitePlugin(mergedOptions);
 
   const { debug } = mergedOptions;
   const { buildStart, resolveId, transform, renderChunk } = sentryPlugin;
 
-  let upload = true;
+  let isSSRBuild = true;
 
   const customPlugin: Plugin = {
-    name: 'sentry-vite-plugin-custom',
+    name: 'sentry-upload-source-maps',
     apply: 'build', // only apply this plugin at build time
-    enforce: 'post',
+    enforce: 'post', // this needs to be set to post, otherwise we don't pick up the output from the SvelteKit adapter
 
     // These hooks are copied from the original Sentry Vite plugin.
     // They're mostly responsible for options parsing and release injection.
@@ -88,19 +105,21 @@ export function makeCustomSentryVitePlugin(options?: SentryVitePluginOptionsOpti
       // `config.build.ssr` is `true` for that first build and `false` in the other ones.
       // Hence we can use it as a switch to upload source maps only once in main build.
       if (!config.build.ssr) {
-        upload = false;
+        isSSRBuild = false;
       }
     },
 
     // We need to start uploading source maps later than in the original plugin
-    // because SvelteKit is still doing some stuff at closeBundle.
+    // because SvelteKit is invoking the adapter at closeBundle.
+    // This means that we need to wait until the adapter is done before we start uploading.
     closeBundle: async () => {
-      if (!upload) {
+      if (!isSSRBuild) {
         return;
       }
 
-      // TODO: Read the out dir from the node adapter somehow as it can be changed in the adapter options
-      const outDir = path.resolve(process.cwd(), 'build');
+      const outDir = path.resolve(process.cwd(), outputDir);
+      // eslint-disable-next-line no-console
+      debug && console.log('[Source Maps Plugin] Looking up source maps in', outDir);
 
       const jsFiles = getFiles(outDir).filter(file => file.endsWith('.js'));
       // eslint-disable-next-line no-console
@@ -128,6 +147,18 @@ export function makeCustomSentryVitePlugin(options?: SentryVitePluginOptionsOpti
             // eslint-disable-next-line no-console
             console.error('[Source Maps Plugin] error while flattening', file, e);
           }
+        }
+
+        // We need to remove the query string from the source map files that our auto-instrument plugin added
+        // to proxy the load functions during building.
+        const mapFile = `${file}.map`;
+        if (fs.existsSync(mapFile)) {
+          const mapContent = (await fs.promises.readFile(mapFile, 'utf-8')).toString();
+          const cleanedMapContent = mapContent.replace(
+            new RegExp(escapeStringForRegex(WRAPPED_MODULE_SUFFIX), 'gm'),
+            '',
+          );
+          await fs.promises.writeFile(mapFile, cleanedMapContent);
         }
       });
 
@@ -165,4 +196,20 @@ function getFiles(dir: string): string[] {
   });
 
   return Array.prototype.concat(...files);
+}
+
+function detectSentryRelease(): string {
+  let releaseFallback: string;
+  try {
+    releaseFallback = child_process.execSync('git rev-parse HEAD', { stdio: 'ignore' }).toString().trim();
+  } catch (_) {
+    // the command can throw for various reasons. Most importantly:
+    // - git is not installed
+    // - there is no git repo or no commit yet
+    // regardless of the case we just fall back to assigning a random uuid.
+    releaseFallback = uuid4();
+  }
+  const release = getSentryRelease() || releaseFallback;
+
+  return release;
 }

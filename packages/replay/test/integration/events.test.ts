@@ -2,12 +2,12 @@ import { getCurrentHub } from '@sentry/core';
 
 import { WINDOW } from '../../src/constants';
 import type { ReplayContainer } from '../../src/replay';
+import { clearSession } from '../../src/session/clearSession';
 import { addEvent } from '../../src/util/addEvent';
 import { PerformanceEntryResource } from '../fixtures/performanceEntry/resource';
 import type { RecordMock } from '../index';
 import { BASE_TIMESTAMP } from '../index';
 import { resetSdkMock } from '../mocks/resetSdkMock';
-import { clearSession } from '../utils/clearSession';
 import { useFakeTimers } from '../utils/use-fake-timers';
 
 useFakeTimers();
@@ -130,12 +130,6 @@ describe('Integration | events', () => {
     expect(replay).toHaveLastSentReplay({
       replayEventPayload: expect.objectContaining({
         replay_start_timestamp: (BASE_TIMESTAMP - 10000) / 1000,
-        contexts: {
-          replay: {
-            error_sample_rate: 0,
-            session_sample_rate: 1,
-          },
-        },
         urls: ['http://localhost/'], // this doesn't truly test if we are capturing the right URL as we don't change URLs, but good enough
       }),
     });
@@ -156,7 +150,7 @@ describe('Integration | events', () => {
     );
 
     // This should be null because `addEvent` has not been called yet
-    expect(replay.getContext().earliestEvent).toBe(null);
+    expect(replay.eventBuffer?.getEarliestTimestamp()).toBe(null);
     expect(mockTransportSend).toHaveBeenCalledTimes(0);
 
     // A new checkout occurs (i.e. a new session was started)
@@ -196,6 +190,6 @@ describe('Integration | events', () => {
     });
 
     // This gets reset after sending replay
-    expect(replay.getContext().earliestEvent).toBe(null);
+    expect(replay.eventBuffer?.getEarliestTimestamp()).toBe(null);
   });
 });

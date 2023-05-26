@@ -1,7 +1,22 @@
 import { createEventBuffer } from '../../src/eventBuffer';
 import { ReplayContainer } from '../../src/replay';
+import { clearSession } from '../../src/session/clearSession';
 import type { RecordingOptions, ReplayPluginOptions } from '../../src/types';
-import { clearSession } from './clearSession';
+
+const DEFAULT_OPTIONS = {
+  flushMinDelay: 100,
+  flushMaxDelay: 100,
+  stickySession: false,
+  sessionSampleRate: 0,
+  errorSampleRate: 1,
+  useCompression: false,
+  blockAllMedia: true,
+  networkDetailAllowUrls: [],
+  networkCaptureBodies: true,
+  networkRequestHeaders: [],
+  networkResponseHeaders: [],
+  _experiments: {},
+};
 
 export function setupReplayContainer({
   options,
@@ -9,14 +24,9 @@ export function setupReplayContainer({
 }: { options?: Partial<ReplayPluginOptions>; recordingOptions?: Partial<RecordingOptions> } = {}): ReplayContainer {
   const replay = new ReplayContainer({
     options: {
-      flushMinDelay: 100,
-      flushMaxDelay: 100,
-      stickySession: false,
-      sessionSampleRate: 0,
-      errorSampleRate: 1,
-      useCompression: false,
-      blockAllMedia: true,
-      _experiments: {},
+      ...DEFAULT_OPTIONS,
+      maskAllInputs: !!recordingOptions?.maskAllInputs,
+      maskAllText: !!recordingOptions?.maskAllText,
       ...options,
     },
     recordingOptions: {
@@ -35,3 +45,17 @@ export function setupReplayContainer({
 
   return replay;
 }
+
+export const DEFAULT_OPTIONS_EVENT_PAYLOAD = {
+  sessionSampleRate: DEFAULT_OPTIONS.sessionSampleRate,
+  errorSampleRate: DEFAULT_OPTIONS.errorSampleRate,
+  useCompressionOption: false,
+  blockAllMedia: DEFAULT_OPTIONS.blockAllMedia,
+  maskAllText: false,
+  maskAllInputs: false,
+  useCompression: DEFAULT_OPTIONS.useCompression,
+  networkDetailHasUrls: DEFAULT_OPTIONS.networkDetailAllowUrls.length > 0,
+  networkCaptureBodies: DEFAULT_OPTIONS.networkCaptureBodies,
+  networkRequestHeaders: DEFAULT_OPTIONS.networkRequestHeaders.length > 0,
+  networkResponseHeaders: DEFAULT_OPTIONS.networkResponseHeaders.length > 0,
+};

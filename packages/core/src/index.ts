@@ -17,6 +17,7 @@ export {
   setTags,
   setUser,
   withScope,
+  captureCheckIn,
 } from './exports';
 export {
   getCurrentHub,
@@ -37,10 +38,12 @@ export { BaseClient } from './baseclient';
 export { initAndBind } from './sdk';
 export { createTransport } from './transports/base';
 export { makeOfflineTransport } from './transports/offline';
+export { makeMultiplexedTransport } from './transports/multiplexed';
 export { SDK_VERSION } from './version';
 export { getIntegrationsToSetup } from './integration';
 export { FunctionToString, InboundFilters } from './integrations';
 export { prepareEvent } from './utils/prepareEvent';
+export { createCheckInEnvelope } from './checkin';
 export { hasTracingEnabled } from './utils/hasTracingEnabled';
 export { DEFAULT_ENVIRONMENT } from './constants';
 

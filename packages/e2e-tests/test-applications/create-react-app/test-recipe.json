@@ -1,6 +1,14 @@
 {
   "$schema": "../../test-recipe-schema.json",
   "testApplicationName": "create-react-app",
-  "buildCommand": "yarn install && yarn build",
-  "tests": []
+  "buildCommand": "pnpm install && pnpm build",
+  "tests": [],
+  "canaryVersions": [
+    {
+      "dependencyOverrides": {
+        "react": "canary",
+        "react-dom": "canary"
+      }
+    }
+  ]
 }

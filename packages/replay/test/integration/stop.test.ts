@@ -3,13 +3,16 @@ import * as SentryUtils from '@sentry/utils';
 import type { Replay } from '../../src';
 import { WINDOW } from '../../src/constants';
 import type { ReplayContainer } from '../../src/replay';
+import { clearSession } from '../../src/session/clearSession';
 import { addEvent } from '../../src/util/addEvent';
+import { createOptionsEvent } from '../../src/util/handleRecordingEmit';
 // mock functions need to be imported first
 import { BASE_TIMESTAMP, mockRrweb, mockSdk } from '../index';
-import { clearSession } from '../utils/clearSession';
 import { useFakeTimers } from '../utils/use-fake-timers';
 
 useFakeTimers();
+
+type MockRunFlush = jest.MockedFunction<ReplayContainer['_runFlush']>;
 
 describe('Integration | stop', () => {
   let replay: ReplayContainer;
@@ -20,6 +23,7 @@ describe('Integration | stop', () => {
   const { record: mockRecord } = mockRrweb();
 
   let mockAddInstrumentationHandler: MockAddInstrumentationHandler;
+  let mockRunFlush: MockRunFlush;
 
   beforeAll(async () => {
     jest.setSystemTime(new Date(BASE_TIMESTAMP));
@@ -29,6 +33,10 @@ describe('Integration | stop', () => {
     ) as MockAddInstrumentationHandler;
 
     ({ replay, integration } = await mockSdk());
+
+    // @ts-ignore private API
+    mockRunFlush = jest.spyOn(replay, '_runFlush');
+
     jest.runAllTimers();
   });
 
@@ -68,9 +76,10 @@ describe('Integration | stop', () => {
     // Not sure where the 20ms comes from tbh
     const EXTRA_TICKS = 20;
     const TEST_EVENT = { data: {}, timestamp: BASE_TIMESTAMP, type: 3 };
+    const previousSessionId = replay.session?.id;
 
     // stop replays
-    integration.stop();
+    await integration.stop();
 
     // Pretend 5 seconds have passed
     jest.advanceTimersByTime(ELAPSED);
@@ -80,13 +89,17 @@ describe('Integration | stop', () => {
     await new Promise(process.nextTick);
     expect(mockRecord.takeFullSnapshot).not.toHaveBeenCalled();
     expect(replay).not.toHaveLastSentReplay();
-    // Session's last activity should not be updated
-    expect(replay.session?.lastActivity).toEqual(BASE_TIMESTAMP);
+    // Session's does not exist
+    expect(replay.session).toEqual(undefined);
     // eventBuffer is destroyed
     expect(replay.eventBuffer).toBe(null);
 
     // re-enable replay
     integration.start();
+    const optionsEvent = createOptionsEvent(replay);
+
+    // will be different session
+    expect(replay.session?.id).not.toEqual(previousSessionId);
 
     jest.advanceTimersByTime(ELAPSED);
 
@@ -110,6 +123,7 @@ describe('Integration | stop', () => {
     jest.runAllTimers();
     await new Promise(process.nextTick);
     expect(replay).toHaveLastSentReplay({
+      recordingPayloadHeader: { segment_id: 0 },
       recordingData: JSON.stringify([
         // This event happens when we call `replay.start`
         {
@@ -117,21 +131,27 @@ describe('Integration | stop', () => {
           timestamp: BASE_TIMESTAMP + ELAPSED + EXTRA_TICKS,
           type: 2,
         },
+        optionsEvent,
         TEST_EVENT,
         hiddenBreadcrumb,
       ]),
     });
+
     // Session's last activity is last updated when we call `setup()` and *NOT*
     // when tab is blurred
     expect(replay.session?.lastActivity).toBe(BASE_TIMESTAMP + ELAPSED + 20);
   });
 
-  it('does not buffer events when stopped', async function () {
-    WINDOW.dispatchEvent(new Event('blur'));
+  it('does not buffer new events after being stopped', async function () {
+    const TEST_EVENT = { data: {}, timestamp: BASE_TIMESTAMP, type: 3 };
+    addEvent(replay, TEST_EVENT);
     expect(replay.eventBuffer?.hasEvents).toBe(true);
+    expect(mockRunFlush).toHaveBeenCalledTimes(0);
 
     // stop replays
-    integration.stop();
+    await integration.stop();
+
+    expect(mockRunFlush).toHaveBeenCalledTimes(1);
 
     expect(replay.eventBuffer).toBe(null);
 
@@ -139,14 +159,16 @@ describe('Integration | stop', () => {
     await new Promise(process.nextTick);
 
     expect(replay.eventBuffer).toBe(null);
-    expect(replay).not.toHaveLastSentReplay();
+    expect(replay).toHaveLastSentReplay({
+      recordingData: JSON.stringify([TEST_EVENT]),
+    });
   });
 
   it('does not call core SDK `addInstrumentationHandler` after initial setup', async function () {
     // NOTE: We clear addInstrumentationHandler mock after every test
-    integration.stop();
+    await integration.stop();
     integration.start();
-    integration.stop();
+    await integration.stop();
     integration.start();
 
     expect(mockAddInstrumentationHandler).not.toHaveBeenCalled();

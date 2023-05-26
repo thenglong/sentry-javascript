@@ -25,7 +25,8 @@ export interface SendReplayData {
 }
 
 export interface Timeouts {
-  sessionIdle: number;
+  sessionIdlePause: number;
+  sessionIdleExpire: number;
   maxSessionLife: number;
 }
 
@@ -182,7 +183,44 @@ export interface WorkerResponse {
 
 export type AddEventResult = void;
 
-export interface SampleRates {
+export interface BeforeAddRecordingEvent {
+  (event: RecordingEvent): RecordingEvent | null | undefined;
+}
+
+export interface ReplayNetworkOptions {
+  /**
+   * Capture request/response details for XHR/Fetch requests that match the given URLs.
+   * The URLs can be strings or regular expressions.
+   * When provided a string, we will match any URL that contains the given string.
+   * You can use a Regex to handle exact matches or more complex matching.
+   *
+   * Only URLs matching these patterns will have bodies & additional headers captured.
+   */
+  networkDetailAllowUrls: (string | RegExp)[];
+
+  /**
+   * If request & response bodies should be captured.
+   * Only applies to URLs matched by `networkDetailAllowUrls`.
+   * Defaults to true.
+   */
+  networkCaptureBodies: boolean;
+
+  /**
+   * Capture the following request headers, in addition to the default ones.
+   * Only applies to URLs matched by `networkDetailAllowUrls`.
+   * Any headers defined here will be captured in addition to the default headers.
+   */
+  networkRequestHeaders: string[];
+
+  /**
+   * Capture the following response headers, in addition to the default ones.
+   * Only applies to URLs matched by `networkDetailAllowUrls`.
+   * Any headers defined here will be captured in addition to the default headers.
+   */
+  networkResponseHeaders: string[];
+}
+
+export interface ReplayPluginOptions extends ReplayNetworkOptions {
   /**
    * The sample rate for session-long replays. 1.0 will record all sessions and
    * 0 will record none.
@@ -194,20 +232,13 @@ export interface SampleRates {
    * independent of `sessionSampleRate`.
    */
   errorSampleRate: number;
-}
 
-/**
- * Session options that are configurable by the integration configuration
- */
-export interface SessionOptions extends SampleRates {
   /**
    * If false, will create a new session per pageload. Otherwise, saves session
    * to Session Storage.
    */
   stickySession: boolean;
-}
 
-export interface ReplayPluginOptions extends SessionOptions {
   /**
    * The amount of time to wait before sending a replay
    */
@@ -231,6 +262,29 @@ export interface ReplayPluginOptions extends SessionOptions {
   blockAllMedia: boolean;
 
   /**
+   * Mask all inputs in recordings
+   */
+  maskAllInputs: boolean;
+
+  /**
+   * Mask all text in recordings
+   */
+  maskAllText: boolean;
+
+  /**
+   * Callback before adding a custom recording event
+   *
+   * Events added by the underlying DOM recording library can *not* be modified,
+   * only custom recording events from the Replay integration will trigger the
+   * callback listeners. This can be used to scrub certain fields in an event (e.g. URLs from navigation events).
+   *
+   * Returning a `null` will drop the event completely. Note, dropping a recording
+   * event is not the same as dropping the replay, the replay will still exist and
+   * continue to function.
+   */
+  beforeAddRecordingEvent?: BeforeAddRecordingEvent;
+
+  /**
    * _experiments allows users to enable experimental or internal features.
    * We don't consider such features as part of the public API and hence we don't guarantee semver for them.
    * Experimental features can be added, changed or removed at any time.
@@ -242,31 +296,26 @@ export interface ReplayPluginOptions extends SessionOptions {
     traceInternals: boolean;
     mutationLimit: number;
     mutationBreadcrumbLimit: number;
-    captureNetworkBodies: boolean;
-    captureRequestHeaders: string[];
-    captureResponseHeaders: string[];
+    slowClicks: {
+      threshold: number;
+      timeout: number;
+      scrollTimeout: number;
+      ignoreSelectors: string[];
+    };
+    delayFlushOnCheckout: number;
   }>;
 }
 
-export interface ReplayNetworkOptions {
+/**
+ * Session options that are configurable by the integration configuration
+ */
+export interface SessionOptions extends Pick<ReplayPluginOptions, 'sessionSampleRate' | 'stickySession'> {
   /**
-   * If request & response bodies should be captured.
+   * Should buffer recordings to be saved later either by error sampling, or by
+   * manually calling `flush()`. This is only a factor if not sampled for a
+   * session-based replay.
    */
-  captureBodies: boolean;
-
-  /**
-   * Capture the following request headers, in addition to the default ones.
-   */
-  requestHeaders: string[];
-
-  /**
-   * Capture the following response headers, in addition to the default ones.
-   */
-  responseHeaders: string[];
-}
-
-export interface ReplayExperimentalPluginOptions {
-  network: ReplayNetworkOptions;
+  allowBuffering: boolean;
 }
 
 export interface ReplayIntegrationPrivacyOptions {
@@ -299,7 +348,7 @@ export interface ReplayIntegrationPrivacyOptions {
   /**
    * A callback function to customize how your text is masked.
    */
-  maskFn?: Pick<RecordingOptions, 'maskTextFn'>;
+  maskFn?: (s: string) => string;
 }
 
 // These are optional for ReplayPluginOptions because the plugin sets default values
@@ -345,7 +394,7 @@ interface CommonEventContext {
   initialUrl: string;
 
   /**
-   * The initial starting timestamp of the session
+   * The initial starting timestamp in ms of the session.
    */
   initialTimestamp: number;
 
@@ -380,25 +429,20 @@ export interface InternalEventContext extends CommonEventContext {
    * Set of Sentry trace ids that have occurred during a replay segment
    */
   traceIds: Set<string>;
-
-  /**
-   * The timestamp of the earliest event that has been added to event buffer. This can happen due to the Performance Observer which buffers events.
-   */
-  earliestEvent: number | null;
 }
 
-export type Sampled = false | 'session' | 'error';
+export type Sampled = false | 'session' | 'buffer';
 
 export interface Session {
   id: string;
 
   /**
-   * Start time of current session
+   * Start time of current session (in ms)
    */
   started: number;
 
   /**
-   * Last known activity of the session
+   * Last known activity of the session (in ms)
    */
   lastActivity: number;
 
@@ -414,10 +458,18 @@ export interface Session {
   previousSessionId?: string;
 
   /**
-   * Is the session sampled? `false` if not sampled, otherwise, `session` or `error`
+   * Is the session sampled? `false` if not sampled, otherwise, `session` or `buffer`
    */
   sampled: Sampled;
+
+  /**
+   * If this is false, the session should not be refreshed when it was inactive.
+   * This can be the case if you had a buffered session which is now recording because an error happened.
+   */
+  shouldRefresh: boolean;
 }
+
+export type EventBufferType = 'sync' | 'worker';
 
 export interface EventBuffer {
   /**
@@ -426,49 +478,67 @@ export interface EventBuffer {
   readonly hasEvents: boolean;
 
   /**
+   * The buffer type
+   */
+  readonly type: EventBufferType;
+
+  /**
    * Destroy the event buffer.
    */
   destroy(): void;
 
   /**
+   * Clear the event buffer.
+   */
+  clear(): void;
+
+  /**
    * Add an event to the event buffer.
-   * `isCheckout` is true if this is either the very first event, or an event triggered by `checkoutEveryNms`.
    *
    * Returns a promise that resolves if the event was successfully added, else rejects.
    */
-  addEvent(event: RecordingEvent, isCheckout?: boolean): Promise<AddEventResult>;
+  addEvent(event: RecordingEvent): Promise<AddEventResult>;
 
   /**
    * Clears and returns the contents of the buffer.
    */
   finish(): Promise<ReplayRecordingData>;
+
+  /**
+   * Get the earliest timestamp in ms of any event currently in the buffer.
+   */
+  getEarliestTimestamp(): number | null;
 }
 
 export type AddUpdateCallback = () => boolean | void;
+
+export interface SendBufferedReplayOptions {
+  continueRecording?: boolean;
+}
 
 export interface ReplayContainer {
   eventBuffer: EventBuffer | null;
   performanceEvents: AllPerformanceEntry[];
   session: Session | undefined;
   recordingMode: ReplayRecordingMode;
-  timeouts: {
-    sessionIdle: number;
-    maxSessionLife: number;
-  };
+  timeouts: Timeouts;
   isEnabled(): boolean;
   isPaused(): boolean;
   getContext(): InternalEventContext;
+  initializeSampling(): void;
   start(): void;
-  stop(reason?: string): void;
+  stop(reason?: string): Promise<void>;
   pause(): void;
   resume(): void;
   startRecording(): void;
   stopRecording(): boolean;
-  flushImmediate(): void;
+  sendBufferedReplayOrFlush(options?: SendBufferedReplayOptions): Promise<void>;
+  conditionalFlush(): Promise<void>;
+  flushImmediate(): Promise<void>;
+  cancelFlush(): void;
   triggerUserActivity(): void;
   addUpdate(cb: AddUpdateCallback): void;
   getOptions(): ReplayPluginOptions;
-  getExperimentalOptions(): ReplayExperimentalPluginOptions;
   getSessionId(): string | undefined;
   checkAndHandleExpiredSession(): boolean | void;
   setInitialState(): void;
@@ -512,12 +582,15 @@ export type FetchHint = FetchBreadcrumbHint & {
   response: Response;
 };
 
-export type NetworkBody = Record<string, unknown> | string;
+type JsonObject = Record<string, unknown>;
+type JsonArray = unknown[];
 
-type NetworkMetaError = 'MAX_BODY_SIZE_EXCEEDED';
+export type NetworkBody = JsonObject | JsonArray | string;
+
+export type NetworkMetaWarning = 'JSON_TRUNCATED' | 'TEXT_TRUNCATED' | 'INVALID_JSON' | 'URL_SKIPPED';
 
 interface NetworkMeta {
-  errors?: NetworkMetaError[];
+  warnings?: NetworkMetaWarning[];
 }
 
 export interface ReplayNetworkRequestOrResponse {
@@ -536,3 +609,10 @@ export type ReplayNetworkRequestData = {
   request?: ReplayNetworkRequestOrResponse;
   response?: ReplayNetworkRequestOrResponse;
 };
+
+export interface SlowClickConfig {
+  threshold: number;
+  timeout: number;
+  scrollTimeout: number;
+  ignoreSelector: string;
+}

@@ -205,7 +205,7 @@ describe('wrapLoadWithSentry', () => {
           op: 'http.client',
           name: 'GET example.com/api/users/',
           data: {
-            method: 'GET',
+            'http.method': 'GET',
             url: 'example.com/api/users/',
             'http.hash': 'testfragment',
             'http.query': 'id=123',
@@ -219,7 +219,7 @@ describe('wrapLoadWithSentry', () => {
           op: 'http.client',
           name: 'POST example.com/api/users/',
           data: {
-            method: 'POST',
+            'http.method': 'POST',
             url: 'example.com/api/users/',
             'http.hash': 'testfragment',
             'http.query': 'id=123',
@@ -233,7 +233,7 @@ describe('wrapLoadWithSentry', () => {
           op: 'http.client',
           name: 'POST example.com/api/users/',
           data: {
-            method: 'POST',
+            'http.method': 'POST',
             url: 'example.com/api/users/',
             'http.hash': 'testfragment',
             'http.query': 'id=123',
@@ -247,7 +247,7 @@ describe('wrapLoadWithSentry', () => {
           op: 'http.client',
           name: 'GET /api/users',
           data: {
-            method: 'GET',
+            'http.method': 'GET',
             url: '/api/users',
             'http.query': 'id=123',
           },
@@ -449,5 +449,18 @@ describe('wrapLoadWithSentry', () => {
       {},
       { handled: false, type: 'sveltekit', data: { function: 'load' } },
     );
+  });
+
+  it("doesn't wrap load more than once if the wrapper was applied multiple times", async () => {
+    async function load({ params }: Parameters<Load>[0]): Promise<ReturnType<Load>> {
+      return {
+        post: params.id,
+      };
+    }
+
+    const wrappedLoad = wrapLoadWithSentry(wrapLoadWithSentry(load));
+    await wrappedLoad(MOCK_LOAD_ARGS);
+
+    expect(mockTrace).toHaveBeenCalledTimes(1);
   });
 });

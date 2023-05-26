@@ -74,7 +74,7 @@ describe('callbacks', () => {
 
     const fetchSpan = {
       data: {
-        method: 'GET',
+        'http.method': 'GET',
         url: 'http://dogs.are.great/',
         type: 'fetch',
       },
@@ -156,7 +156,7 @@ describe('callbacks', () => {
       expect(newSpan).toBeDefined();
       expect(newSpan).toBeInstanceOf(Span);
       expect(newSpan.data).toEqual({
-        method: 'GET',
+        'http.method': 'GET',
         type: 'fetch',
         url: 'http://dogs.are.great/',
       });
@@ -213,6 +213,37 @@ describe('callbacks', () => {
 
       expect(newSpan).toBeUndefined();
     });
+
+    it('adds content-length to span data on finish', () => {
+      const spans: Record<string, Span> = {};
+
+      // triggered by request being sent
+      fetchCallback(fetchHandlerData, alwaysCreateSpan, alwaysAttachHeaders, spans);
+
+      const newSpan = transaction.spanRecorder?.spans[1] as Span;
+
+      expect(newSpan).toBeDefined();
+
+      const postRequestFetchHandlerData = {
+        ...fetchHandlerData,
+        endTimestamp,
+        response: { status: 404, headers: { get: () => 123 } },
+      };
+
+      // triggered by response coming back
+      fetchCallback(postRequestFetchHandlerData, alwaysCreateSpan, alwaysAttachHeaders, spans);
+
+      const finishedSpan = transaction.spanRecorder?.spans[1] as Span;
+
+      expect(finishedSpan).toBeDefined();
+      expect(finishedSpan).toBeInstanceOf(Span);
+      expect(finishedSpan.data).toEqual({
+        'http.response_content_length': 123,
+        'http.method': 'GET',
+        type: 'fetch',
+        url: 'http://dogs.are.great/',
+      });
+    });
   });
 
   describe('xhrCallback()', () => {
@@ -220,7 +251,7 @@ describe('callbacks', () => {
 
     const xhrSpan = {
       data: {
-        method: 'GET',
+        'http.method': 'GET',
         url: 'http://dogs.are.great/',
         type: 'xhr',
       },
@@ -295,7 +326,7 @@ describe('callbacks', () => {
 
       expect(newSpan).toBeInstanceOf(Span);
       expect(newSpan.data).toEqual({
-        method: 'GET',
+        'http.method': 'GET',
         type: 'xhr',
         url: 'http://dogs.are.great/',
       });
@@ -381,12 +412,17 @@ describe('shouldAttachHeaders', () => {
       'http://localhost:3000/test',
       'http://somewhere.com/test/localhost/123',
       'http://somewhere.com/test?url=localhost:3000&test=123',
+      '//localhost:3000/test',
+      '/',
     ])('return `true` for urls matching defaults (%s)', url => {
       expect(shouldAttachHeaders(url, undefined)).toBe(true);
     });
 
-    it.each(['notmydoman/api/test', 'example.com'])('return `false` for urls not matching defaults (%s)', url => {
-      expect(shouldAttachHeaders(url, undefined)).toBe(false);
-    });
+    it.each(['notmydoman/api/test', 'example.com', '//example.com'])(
+      'return `false` for urls not matching defaults (%s)',
+      url => {
+        expect(shouldAttachHeaders(url, undefined)).toBe(false);
+      },
+    );
   });
 });

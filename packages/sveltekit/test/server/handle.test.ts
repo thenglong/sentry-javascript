@@ -2,6 +2,7 @@ import { addTracingExtensions, Hub, makeMain, Scope } from '@sentry/core';
 import { NodeClient } from '@sentry/node';
 import type { Transaction } from '@sentry/types';
 import type { Handle } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
 import { vi } from 'vitest';
 
 import { sentryHandle, transformPageChunk } from '../../src/server/handle';
@@ -69,7 +70,18 @@ const enum Type {
   Async = 'async',
 }
 
-function resolve(type: Type, isError: boolean): Parameters<Handle>[0]['resolve'] {
+function resolve(
+  type: Type,
+  isError: boolean,
+  throwSpecialError?: 'redirect' | 'http',
+): Parameters<Handle>[0]['resolve'] {
+  if (throwSpecialError === 'redirect') {
+    throw redirect(302, '/redirect');
+  }
+  if (throwSpecialError === 'http') {
+    throw { status: 404, body: 'Not found' };
+  }
+
   if (type === Type.Sync) {
     return (..._args: unknown[]) => {
       if (isError) {
@@ -120,7 +132,7 @@ describe('handleSentry', () => {
     it('should return a response', async () => {
       let response: any = undefined;
       try {
-        response = await sentryHandle({ event: mockEvent(), resolve: resolve(type, isError) });
+        response = await sentryHandle()({ event: mockEvent(), resolve: resolve(type, isError) });
       } catch (e) {
         expect(e).toBeInstanceOf(Error);
         expect(e.message).toEqual(type);
@@ -136,7 +148,7 @@ describe('handleSentry', () => {
       });
 
       try {
-        await sentryHandle({ event: mockEvent(), resolve: resolve(type, isError) });
+        await sentryHandle()({ event: mockEvent(), resolve: resolve(type, isError) });
       } catch (e) {
         //
       }
@@ -161,11 +173,11 @@ describe('handleSentry', () => {
       });
 
       try {
-        await sentryHandle({
+        await sentryHandle()({
           event: mockEvent(),
           resolve: async _ => {
             // simulateing a nested load call:
-            await sentryHandle({
+            await sentryHandle()({
               event: mockEvent({ route: { id: 'api/users/details/[id]' } }),
               resolve: resolve(type, isError),
             });
@@ -216,7 +228,7 @@ describe('handleSentry', () => {
       });
 
       try {
-        await sentryHandle({ event, resolve: resolve(type, isError) });
+        await sentryHandle()({ event, resolve: resolve(type, isError) });
       } catch (e) {
         //
       }
@@ -256,7 +268,7 @@ describe('handleSentry', () => {
       });
 
       try {
-        await sentryHandle({ event, resolve: resolve(type, isError) });
+        await sentryHandle()({ event, resolve: resolve(type, isError) });
       } catch (e) {
         //
       }
@@ -280,7 +292,7 @@ describe('handleSentry', () => {
       });
 
       try {
-        await sentryHandle({ event: mockEvent(), resolve: resolve(type, isError) });
+        await sentryHandle()({ event: mockEvent(), resolve: resolve(type, isError) });
       } catch (e) {
         expect(mockCaptureException).toBeCalledTimes(1);
         expect(addEventProcessorSpy).toBeCalledTimes(1);
@@ -292,11 +304,27 @@ describe('handleSentry', () => {
       }
     });
 
+    it("doesn't send redirects in a request handler to Sentry", async () => {
+      try {
+        await sentryHandle()({ event: mockEvent(), resolve: resolve(type, false, 'redirect') });
+      } catch (e) {
+        expect(mockCaptureException).toBeCalledTimes(0);
+      }
+    });
+
+    it("doesn't send Http 4xx errors in a request handler to Sentry", async () => {
+      try {
+        await sentryHandle()({ event: mockEvent(), resolve: resolve(type, false, 'http') });
+      } catch (e) {
+        expect(mockCaptureException).toBeCalledTimes(0);
+      }
+    });
+
     it('calls `transformPageChunk`', async () => {
       const mockResolve = vi.fn().mockImplementation(resolve(type, isError));
       const event = mockEvent();
       try {
-        await sentryHandle({ event, resolve: mockResolve });
+        await sentryHandle()({ event, resolve: mockResolve });
       } catch (e) {
         expect(e).toBeInstanceOf(Error);
         expect(e.message).toEqual(type);

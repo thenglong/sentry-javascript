@@ -49,38 +49,42 @@ export type RecordingSnapshot = FullRecordingSnapshot | IncrementalRecordingSnap
 export function waitForReplayRequest(
   page: Page,
   segmentIdOrCallback?: number | ((event: ReplayEvent, res: Response) => boolean),
+  timeout?: number,
 ): Promise<Response> {
   const segmentId = typeof segmentIdOrCallback === 'number' ? segmentIdOrCallback : undefined;
   const callback = typeof segmentIdOrCallback === 'function' ? segmentIdOrCallback : undefined;
 
-  return page.waitForResponse(res => {
-    const req = res.request();
+  return page.waitForResponse(
+    res => {
+      const req = res.request();
 
-    const postData = req.postData();
-    if (!postData) {
-      return false;
-    }
-
-    try {
-      const event = envelopeRequestParser(req);
-
-      if (!isReplayEvent(event)) {
+      const postData = req.postData();
+      if (!postData) {
         return false;
       }
 
-      if (callback) {
-        return callback(event, res);
-      }
+      try {
+        const event = envelopeRequestParser(req);
 
-      if (segmentId !== undefined) {
-        return event.segment_id === segmentId;
-      }
+        if (!isReplayEvent(event)) {
+          return false;
+        }
 
-      return true;
-    } catch {
-      return false;
-    }
-  });
+        if (callback) {
+          return callback(event, res);
+        }
+
+        if (segmentId !== undefined) {
+          return event.segment_id === segmentId;
+        }
+
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    timeout ? { timeout } : undefined,
+  );
 }
 
 export function isReplayEvent(event: Event): event is ReplayEvent {
@@ -156,6 +160,7 @@ type CustomRecordingContent = {
 type RecordingContent = {
   fullSnapshots: RecordingSnapshot[];
   incrementalSnapshots: RecordingSnapshot[];
+  optionsEvents: CustomRecordingEvent[];
 } & CustomRecordingContent;
 
 /**
@@ -203,6 +208,11 @@ export function getIncrementalRecordingSnapshots(resOrReq: Request | Response): 
   return events.filter(isIncrementalSnapshot);
 }
 
+function getOptionsEvents(replayRequest: Request): CustomRecordingEvent[] {
+  const events = getDecompressedRecordingEvents(replayRequest);
+  return getAllCustomRrwebRecordingEvents(events).filter(data => data.tag === 'options');
+}
+
 function getDecompressedRecordingEvents(resOrReq: Request | Response): RecordingSnapshot[] {
   const replayRequest = getRequest(resOrReq);
   return (
@@ -223,8 +233,9 @@ export function getReplayRecordingContent(resOrReq: Request | Response): Recordi
   const fullSnapshots = getFullRecordingSnapshots(replayRequest);
   const incrementalSnapshots = getIncrementalRecordingSnapshots(replayRequest);
   const customEvents = getCustomRecordingEvents(replayRequest);
+  const optionsEvents = getOptionsEvents(replayRequest);
 
-  return { fullSnapshots, incrementalSnapshots, ...customEvents };
+  return { fullSnapshots, incrementalSnapshots, optionsEvents, ...customEvents };
 }
 
 /**

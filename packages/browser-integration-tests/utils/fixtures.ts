@@ -3,7 +3,7 @@ import { test as base } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 
-import { generateLoader, generatePage } from './generatePage';
+import { generatePage } from './generatePage';
 
 export const TEST_HOST = 'http://sentry-test.io';
 
@@ -27,8 +27,9 @@ export type TestFixtures = {
   _autoSnapshotSuffix: void;
   testDir: string;
   getLocalTestPath: (options: { testDir: string }) => Promise<string>;
-  getLocalTestUrl: (options: { testDir: string }) => Promise<string>;
+  getLocalTestUrl: (options: { testDir: string; skipRouteHandler?: boolean }) => Promise<string>;
   forceFlushReplay: () => Promise<string>;
+  enableConsole: () => void;
   runInChromium: (fn: (...args: unknown[]) => unknown, args?: unknown[]) => unknown;
   runInFirefox: (fn: (...args: unknown[]) => unknown, args?: unknown[]) => unknown;
   runInWebkit: (fn: (...args: unknown[]) => unknown, args?: unknown[]) => unknown;
@@ -49,19 +50,20 @@ const sentryTest = base.extend<TestFixtures>({
   ],
 
   getLocalTestUrl: ({ page }, use) => {
-    return use(async ({ testDir }) => {
+    return use(async ({ testDir, skipRouteHandler = false }) => {
       const pagePath = `${TEST_HOST}/index.html`;
 
       await build(testDir);
-      generateLoader(testDir);
 
       // Serve all assets under
-      await page.route(`${TEST_HOST}/*.*`, route => {
-        const file = route.request().url().split('/').pop();
-        const filePath = path.resolve(testDir, `./dist/${file}`);
+      if (!skipRouteHandler) {
+        await page.route(`${TEST_HOST}/*.*`, route => {
+          const file = route.request().url().split('/').pop();
+          const filePath = path.resolve(testDir, `./dist/${file}`);
 
-        return fs.existsSync(filePath) ? route.fulfill({ path: filePath }) : route.continue();
-      });
+          return fs.existsSync(filePath) ? route.fulfill({ path: filePath }) : route.continue();
+        });
+      }
 
       return pagePath;
     });
@@ -106,6 +108,13 @@ const sentryTest = base.extend<TestFixtures>({
       });
       document.dispatchEvent(new Event('visibilitychange'));
     `),
+    );
+  },
+
+  enableConsole: ({ page }, use) => {
+    return use(() =>
+      // eslint-disable-next-line no-console
+      page.on('console', msg => console.log(msg.text())),
     );
   },
 });

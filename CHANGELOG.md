@@ -4,6 +4,307 @@
 
 - "You miss 100 percent of the chances you don't take. — Wayne Gretzky" — Michael Scott
 
+## 7.53.1
+
+- chore(deps): bump socket.io-parser from 4.2.1 to 4.2.3 (#8196)
+- chore(svelte): Bump magic-string to 0.30.0 (#8197)
+- fix(core): Fix racecondition that modifies in-flight sessions (#8203)
+- fix(node): Catch `os.uptime()` throwing because of EPERM (#8206)
+- fix(replay): Fix buffered replays creating replay w/o error occuring (#8168)
+
+## 7.53.0
+
+- feat(replay): Add `beforeAddRecordingEvent` Replay option (#8124)
+- feat(replay): Do not capture replays < 5 seconds (#7949)
+- fix(nextjs): Guard for non-absolute paths when injecting sentry config (#8151)
+- fix(nextjs): Import path issue on Windows (#8142)
+- fix(nextjs): Make `withSentryConfig` isomorphic (#8166)
+- fix(node): Add debug logging for node checkin (#8131)
+- fix(node): Add LRU map for tracePropagationTargets calculation (#8130)
+- fix(node): Remove new URL usage in Undici integration (#8147)
+- fix(replay): Show the correct Replay config option name `maskFn`
+- fix(sveltekit): Avoid double-wrapping load functions (#8094)
+- fix(tracing): Change where content-length gets added (#8139)
+- fix(tracing): Use integer for content length (#8152)
+- fix(utils): Fail silently if the provided Dsn is invalid (#8121)
+- ref(node): Cache undici trace propagation decisions (#8136)
+- ref(serverless): Remove relay extension from AWS Layer (#8080)
+
+## 7.52.1
+
+- feat(replay): Capture slow clicks (experimental) (#8052)
+
+
+## 7.52.0
+
+### Important Next.js SDK changes:
+
+This release adds support Vercel Cron Jobs in the Next.js SDK.
+The SDK will automatically create [Sentry Cron Monitors](https://docs.sentry.io/product/crons/) for your [Vercel Cron Jobs](https://vercel.com/docs/cron-jobs) configured via `vercel.json` when deployed on Vercel.
+
+You can opt out of this functionality by setting the `automaticVercelMonitors` option to `false`:
+
+```js
+// next.config.js
+const nextConfig = {
+  sentry: {
+    automaticVercelMonitors: false,
+  },
+};
+```
+
+(Note: Sentry Cron Monitoring is currently in beta and subject to change. Help us make it better by letting us know what you think. Respond on [GitHub](https://github.com/getsentry/sentry/discussions/42283) or write to us at crons-feedback@sentry.io)
+
+- feat(nextjs): Add API method to wrap API routes with crons instrumentation (#8084)
+- feat(nextjs): Add automatic monitors for Vercel Cron Jobs (#8088)
+
+### Other changes
+
+- feat(replay): Capture keyboard presses for special characters (#8051)
+- fix(build): Don't mangle away global debug ID map (#8096)
+- fix(core): Return checkin id from client (#8116)
+- fix(core): Use last error for `ignoreErrors` check (#8089)
+- fix(docs): Change to `addTracingExtensions` was not documented in MIGRATION.md (#8101)
+- fix(replay): Check relative URLs correctly (#8024)
+- fix(tracing-internal): Avoid classifying protocol-relative URLs as same-origin urls (#8114)
+- ref: Hoist `createCheckinEnvelope` to core package (#8082)
+
+## 7.51.2
+
+- fix(nextjs): Continue traces in data fetchers when there is an already active transaction on the hub (#8073)
+- fix(sveltekit): Avoid creating the Sentry Vite plugin in dev mode (#8065)
+
+## 7.51.1
+
+- feat(replay): Add event to capture options on checkouts (#8011)
+- feat(replay): Improve click target detection (#8026)
+- fix(node): Make sure we use same ID for checkIns (#8050)
+- fix(replay: Keep session active on key press (#8037)
+- fix(replay): Move error sampling to before send  (#8057)
+- fix(sveltekit): Wrap `load` when typed explicitly (#8049)
+
+**Replay `rrweb` changes:**
+
+`@sentry-internal/rrweb` was updated from 1.106.0 to 1.108.0:
+
+- fix: Fix some input masking (esp for radio buttons) ([#85](https://github.com/getsentry/rrweb/pull/85))
+- fix: Unescaped `:` in CSS rule from Safari ([#86](https://github.com/getsentry/rrweb/pull/86))
+- feat: Define custom elements (web components) ([#87](https://github.com/getsentry/rrweb/pull/87))
+
+Work in this release contributed by @sreetamdas. Thank you for your contribution!
+
+## 7.51.0
+
+### Important Changes
+
+- **feat(sveltekit): Auto-wrap `load` functions with proxy module (#7994)**
+
+`@sentry/sveltekit` now auto-wraps `load` functions in
+
+* `+(page|layout).(ts|js)` files (universal loads)
+* `+(page|layout).server.(ts|js)` files (server-only loads)
+
+This means that you don't have to manually add the `wrapLoadWithSentry` and `wrapServerLoadWithSentry` functions around your load functions. The SDK will not interfere with already wrapped `load` functions.
+
+For more details, take a look at the [Readme](https://github.com/getsentry/sentry-javascript/blob/develop/packages/sveltekit/README.md#configure-auto-instrumentation)
+
+- **chore(angular): Upgrade `peerDependencies` to Angular 16 (#8035)**
+
+We now officially support Angular 16 in `@sentry/angular-ivy`.
+Note that `@sentry/angular` _does not_ support Angular 16.
+
+- **feat(node): Add ability to send cron monitor check ins (#8039)**
+
+**Note: This release contains a bug with generating cron monitors. We recommend you upgrade the JS SDK to 7.51.1 or above to use cron monitoring functionality**
+
+This release adds [Sentry cron monitoring](https://docs.sentry.io/product/crons/) support to the Node SDK.
+
+Check-in monitoring allows you to track a job's progress by completing two check-ins: one at the start of your job and another at the end of your job. This two-step process allows Sentry to notify you if your job didn't start when expected (missed) or if it exceeded its maximum runtime (failed).
+
+```ts
+const Sentry = require('@sentry/node');
+
+// 🟡 Notify Sentry your job is running:
+const checkInId = Sentry.captureCheckIn({
+  monitorSlug: '<monitor-slug>',
+  status: 'in_progress',
+});
+
+// Execute your scheduled task here...
+
+// 🟢 Notify Sentry your job has completed successfully:
+Sentry.captureCheckIn({
+  // make sure you pass in the checkInId generated by the first call to captureCheckIn
+  checkInId,
+  monitorSlug: '<monitor-slug>',
+  status: 'ok',
+});
+```
+
+If your job execution fails, you can notify Sentry about the failure:
+
+```javascript
+// 🔴 Notify Sentry your job has failed:
+Sentry.captureCheckIn({
+  checkInId,
+  monitorSlug: '<monitor-slug>',
+  status: 'error',
+});
+```
+
+### Additional Features and Fixes
+
+- feat(browser): Export makeMultiplexedTransport from browser SDK (#8012)
+- feat(node): Add `http.method` to node http spans (#7991)
+- feat(tracing): add body size for fetch requests (#7935)
+- feat(tracing): Use http.method for span data (#7990)
+- fix(integrations): Handle windows paths with no prefix or backslash prefix in `RewriteFrames` (#7995)
+- fix(node): Mark stack frames with url protocol as in-app frames (#8008)
+- fix(remix): Export `Integration` type declaration as union type (#8016)
+- fix(replay): Do not add replay_id to DSC while buffering (#8020)
+- fix(tracing): Don't set method multiple times (#8014)
+- fix(utils): Normalize `undefined` to `undefined` instead of `"[undefined]"` (#8017)
+
+Work in this release contributed by @srubin and @arjenbrandenburgh. Thank you for your contributions!
+
+## 7.50.0
+
+### Important Changes
+
+- **doc(sveltekit): Promote the SDK to beta state (#7976)**
+  - feat(sveltekit): Convert `sentryHandle` to a factory function (#7975)
+
+With this release, the Sveltekit SDK ([@sentry/sveltekit](./packages/sveltekit/README.md)) is promoted to Beta.
+This means that we do not expect any more breaking changes.
+
+The final breaking change is that `sentryHandle` is now a function.
+So in order to update to 7.50.0, you have to update your `hooks.server.js` file:
+
+```js
+// hooks.server.js
+
+// Old:
+export const handle = sentryHandle;
+// New:
+export const handle = sentryHandle();
+```
+
+- **feat(replay): Allow to configure URLs to capture network bodies/headers (#7953)**
+
+You can now capture request/response bodies & headers of network requests in Replay.
+You have to define an allowlist of URLs you want to capture additional information for:
+
+```js
+new Replay({
+  networkDetailAllowUrls: ['https://sentry.io/api'],
+});
+```
+
+By default, we will capture request/response bodies, as well as the request/response headers `content-type`, `content-length` and `accept`.
+You can configure this with some additional configuration:
+
+```js
+new Replay({
+  networkDetailAllowUrls: ['https://sentry.io/api'],
+  // opt-out of capturing bodies
+  networkCaptureBodies: false,
+  // These headers are captured _in addition to_ the default headers
+  networkRequestHeaders: ['X-Custom-Header'],
+  networkResponseHeaders: ['X-Custom-Header', 'X-Custom-Header-2']
+});
+```
+
+Note that bodies will be truncated to a max length of ~150k characters.
+
+**- feat(replay): Changes of sampling behavior & public API**
+  - feat(replay): Change the behavior of error-based sampling (#7768)
+  - feat(replay): Change `flush()` API to record current event buffer (#7743)
+  - feat(replay): Change `stop()` to flush and remove current session (#7741)
+
+We have changed the behavior of error-based sampling, as well as adding & adjusting APIs a bit to be more aligned with expectations.
+See [Sampling](./packages/replay/README.md#sampling) for details.
+
+We've also revamped some public APIs in order to be better aligned with expectations. See [Stoping & Starting Replays manually](./packages/replay/README.md#stopping--starting-replays-manually) for details.
+
+- **feat(core): Add multiplexed transport (#7926)**
+
+We added a new transport to support multiplexing.
+With this, you can configure Sentry to send events to different DSNs, depending on a logic of your choosing:
+
+```js
+import { makeMultiplexedTransport } from '@sentry/core';
+import { init, captureException, makeFetchTransport } from '@sentry/browser';
+
+function dsnFromFeature({ getEvent }) {
+  const event = getEvent();
+  switch(event?.tags?.feature) {
+    case 'cart':
+      return ['__CART_DSN__'];
+    case 'gallery':
+      return ['__GALLERY_DSN__'];
+  }
+  return []
+}
+
+init({
+  dsn: '__FALLBACK_DSN__',
+  transport: makeMultiplexedTransport(makeFetchTransport, dsnFromFeature)
+});
+```
+
+### Additional Features and Fixes
+
+- feat(nextjs): Add `disableLogger` option that automatically tree shakes logger statements (#7908)
+- feat(node): Make Undici a default integration. (#7967)
+- feat(replay): Extend session idle time until expire to 15min (#7955)
+- feat(tracing): Add `db.system` span data to DB spans (#7952)
+- fix(core): Avoid crash when Function.prototype is frozen (#7899)
+- fix(nextjs): Fix inject logic for Next.js 13.3.1 canary (#7921)
+- fix(replay): Ensure console breadcrumb args are truncated (#7917)
+- fix(replay): Ensure we do not set replayId on dsc if replay is disabled (#7939)
+- fix(replay): Ensure we still truncate large bodies if they are failed JSON (#7923)
+- fix(utils): default normalize() to a max. of 100 levels deep instead of Inifnity (#7957)
+
+Work in this release contributed by @Jack-Works. Thank you for your contribution!
+
+## 7.49.0
+
+### Important Changes
+
+- **feat(sveltekit): Read adapter output directory from `svelte.config.js` (#7863)**
+
+Our source maps upload plugin is now able to read `svelte.config.js`. This is necessary to automatically find the output directory that users can specify when setting up the Node adapter.
+
+- **fix(replay): Ensure we normalize scope breadcrumbs to max. depth to avoid circular ref (#7915)**
+
+This release fixes a potential problem with how Replay captures console logs.
+Any objects logged will now be cut off after a maximum depth of 10, as well as cutting off any properties after the 1000th.
+This should ensure we do not accidentally capture massive console logs, where a stringified object could reach 100MB or more.
+
+- **fix(utils): Normalize HTML elements as string (#7916)**
+
+We used to normalize references to HTML elements as POJOs.
+This is both not very easily understandable, as well as potentially large, as HTML elements may have properties attached to them.
+With this change, we now normalize them to e.g. `[HTMLElement: HTMLInputElement]`.
+
+### Additional Features and Fixes
+
+- feat(browser): Simplify stack parsers (#7897)
+- feat(node): Add monitor upsert types (#7914)
+- feat(replay): Truncate network bodies to max size (#7875)
+- fix(gatsby): Don't crash build when auth token is missing (#7858)
+- fix(gatsby): Use `import` for `gatsby-browser.js` instead of `require` (#7889)
+- fix(nextjs): Handle braces in stack frame URLs (#7900)
+- fix(nextjs): Mark value injection loader result as uncacheable (#7870)
+- fix(node): Correct typo in trpc integration transaciton name (#7871)
+- fix(node): reduce deepReadDirSync runtime complexity (#7910)
+- fix(sveltekit): Avoid capturing "Not Found" errors in server `handleError` wrapper (#7898)
+- fix(sveltekit): Detect sentry release before creating the Vite plugins (#7902)
+- fix(sveltekit): Use `sentry.properties` file when uploading source maps (#7890)
+- fix(tracing): Ensure we use s instead of ms for startTimestamp (#7877)
+- ref(deprecate): Deprecate `timestampWithMs` (#7878)
+- ref(nextjs): Don't use Sentry Webpack Plugin in dev mode (#7901)
+
 ## 7.48.0
 
 ### Important Changes
@@ -24,7 +325,7 @@ If you want to manually add async context isolation to your application, you can
 import * as Sentry from '@sentry/node';
 
 const requestHandler = (ctx, next) => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     Sentry.runWithAsyncContext(async () => {
       const hub = Sentry.getCurrentHub();
 
@@ -38,7 +339,11 @@ const requestHandler = (ctx, next) => {
         )
       );
 
-      await next();
+      try {
+        await next();
+      } catch (err) {
+        reject(err);
+      }
       resolve();
     });
   });

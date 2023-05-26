@@ -14,6 +14,7 @@ describe('normalize()', () => {
       expect(normalize(42)).toEqual(42);
       expect(normalize(true)).toEqual(true);
       expect(normalize(null)).toEqual(null);
+      expect(normalize(undefined)).toBeUndefined();
     });
 
     test('return same object or arrays for referenced inputs', () => {
@@ -84,6 +85,65 @@ describe('normalize()', () => {
       const obj = { name: 'Alice' } as any;
       obj.identity = { self: obj };
       expect(normalize(obj)).toEqual({ name: 'Alice', identity: { self: '[Circular ~]' } });
+    });
+
+    test('circular objects with proxy', () => {
+      const obj1 = { name: 'Alice', child: null } as any;
+      const obj2 = { name: 'John', child: null } as any;
+
+      function getObj1(target: any, prop: string | number | symbol): any {
+        return prop === 'child'
+          ? new Proxy(obj2, {
+              get(t, p) {
+                return getObj2(t, p);
+              },
+            })
+          : target[prop];
+      }
+
+      function getObj2(target: any, prop: string | number | symbol): any {
+        return prop === 'child'
+          ? new Proxy(obj1, {
+              get(t, p) {
+                return getObj1(t, p);
+              },
+            })
+          : target[prop];
+      }
+
+      const proxy1 = new Proxy(obj1, {
+        get(target, prop) {
+          return getObj1(target, prop);
+        },
+      });
+
+      const actual = normalize(proxy1);
+
+      // This generates 100 nested objects, as we cannot identify the circular reference since they are dynamic proxies
+      // However, this test verifies that we can normalize at all, and do not fail out
+      expect(actual).toEqual({
+        name: 'Alice',
+        child: { name: 'John', child: expect.objectContaining({ name: 'Alice', child: expect.any(Object) }) },
+      });
+
+      let last = actual;
+      for (let i = 0; i < 99; i++) {
+        expect(last).toEqual(
+          expect.objectContaining({
+            name: expect.any(String),
+            child: expect.any(Object),
+          }),
+        );
+        last = last.child;
+      }
+
+      // Last one is transformed to [Object]
+      expect(last).toEqual(
+        expect.objectContaining({
+          name: expect.any(String),
+          child: '[Object]',
+        }),
+      );
     });
 
     test('deep circular objects', () => {
@@ -263,6 +323,32 @@ describe('normalize()', () => {
     });
   });
 
+  describe('handles HTML elements', () => {
+    test('HTMLDivElement', () => {
+      expect(
+        normalize({
+          div: document.createElement('div'),
+          div2: document.createElement('div'),
+        }),
+      ).toEqual({
+        div: '[HTMLElement: HTMLDivElement]',
+        div2: '[HTMLElement: HTMLDivElement]',
+      });
+    });
+
+    test('input elements', () => {
+      expect(
+        normalize({
+          input: document.createElement('input'),
+          select: document.createElement('select'),
+        }),
+      ).toEqual({
+        input: '[HTMLElement: HTMLInputElement]',
+        select: '[HTMLElement: HTMLSelectElement]',
+      });
+    });
+  });
+
   describe('calls toJSON if implemented', () => {
     test('primitive values', () => {
       const a = new Number(1) as any;
@@ -318,7 +404,6 @@ describe('normalize()', () => {
 
   describe('changes unserializeable/global values/classes to their respective string representations', () => {
     test('primitive values', () => {
-      expect(normalize(undefined)).toEqual('[undefined]');
       expect(normalize(NaN)).toEqual('[NaN]');
       expect(normalize(Symbol('dogs'))).toEqual('[Symbol(dogs)]');
       // `BigInt` doesn't exist in Node 8
@@ -340,28 +425,26 @@ describe('normalize()', () => {
     });
 
     test('primitive values in objects/arrays', () => {
-      expect(normalize(['foo', 42, undefined, NaN])).toEqual(['foo', 42, '[undefined]', '[NaN]']);
+      expect(normalize(['foo', 42, NaN])).toEqual(['foo', 42, '[NaN]']);
       expect(
         normalize({
           foo: 42,
-          bar: undefined,
-          baz: NaN,
+          bar: NaN,
         }),
       ).toEqual({
         foo: 42,
-        bar: '[undefined]',
-        baz: '[NaN]',
+        bar: '[NaN]',
       });
     });
 
     test('primitive values in deep objects/arrays', () => {
-      expect(normalize(['foo', 42, [[undefined]], [NaN]])).toEqual(['foo', 42, [['[undefined]']], ['[NaN]']]);
+      expect(normalize(['foo', 42, [[undefined]], [NaN]])).toEqual(['foo', 42, [[undefined]], ['[NaN]']]);
       expect(
         normalize({
           foo: 42,
           bar: {
             baz: {
-              quz: undefined,
+              quz: null,
             },
           },
           wat: {
@@ -372,7 +455,7 @@ describe('normalize()', () => {
         foo: 42,
         bar: {
           baz: {
-            quz: '[undefined]',
+            quz: null,
           },
         },
         wat: {

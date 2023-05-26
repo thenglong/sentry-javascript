@@ -1,4 +1,3 @@
-import { addBreadcrumb } from '@sentry/core';
 import type { Event, EventHint } from '@sentry/types';
 import { logger } from '@sentry/utils';
 
@@ -6,6 +5,7 @@ import type { ReplayContainer } from '../types';
 import { isErrorEvent, isReplayEvent, isTransactionEvent } from '../util/eventUtils';
 import { isRrwebError } from '../util/isRrwebError';
 import { handleAfterSendEvent } from './handleAfterSendEvent';
+import { shouldSampleForBufferEvent } from './util/shouldSampleForBufferEvent';
 
 /**
  * Returns a listener to be added to `addGlobalEventProcessor(listener)`.
@@ -36,16 +36,17 @@ export function handleGlobalEventListener(
       return null;
     }
 
-    // Only tag transactions with replayId if not waiting for an error
-    if (isErrorEvent(event) || (isTransactionEvent(event) && replay.recordingMode === 'session')) {
-      event.tags = { ...event.tags, replayId: replay.getSessionId() };
-    }
+    // When in buffer mode, we decide to sample here.
+    // Later, in `handleAfterSendEvent`, if the replayId is set, we know that we sampled
+    // And convert the buffer session to a full session
+    const isErrorEventSampled = shouldSampleForBufferEvent(replay, event);
 
-    if (__DEBUG_BUILD__ && replay.getOptions()._experiments.traceInternals && isErrorEvent(event)) {
-      const exc = getEventExceptionValues(event);
-      addInternalBreadcrumb({
-        message: `Tagging event (${event.event_id}) - ${event.message} - ${exc.type}: ${exc.value}`,
-      });
+    // Tag errors if it has been sampled in buffer mode, or if it is session mode
+    // Only tag transactions if in session mode
+    const shouldTagReplayId = isErrorEventSampled || replay.recordingMode === 'session';
+
+    if (shouldTagReplayId) {
+      event.tags = { ...event.tags, replayId: replay.getSessionId() };
     }
 
     // In cases where a custom client is used that does not support the new hooks (yet),
@@ -56,24 +57,5 @@ export function handleGlobalEventListener(
     }
 
     return event;
-  };
-}
-
-function addInternalBreadcrumb(arg: Parameters<typeof addBreadcrumb>[0]): void {
-  const { category, level, message, ...rest } = arg;
-
-  addBreadcrumb({
-    category: category || 'console',
-    level: level || 'debug',
-    message: `[debug]: ${message}`,
-    ...rest,
-  });
-}
-
-function getEventExceptionValues(event: Event): { type: string; value: string } {
-  return {
-    type: 'Unknown',
-    value: 'n/a',
-    ...(event.exception && event.exception.values && event.exception.values[0]),
   };
 }

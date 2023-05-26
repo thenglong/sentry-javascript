@@ -14,7 +14,7 @@ import * as path from 'path';
 import commonjs from '@rollup/plugin-commonjs';
 import deepMerge from 'deepmerge';
 import license from 'rollup-plugin-license';
-import resolve from '@rollup/plugin-node-resolve';
+import { nodeResolve } from '@rollup/plugin-node-resolve';
 import replace from '@rollup/plugin-replace';
 import { terser } from 'rollup-plugin-terser';
 import typescript from '@rollup/plugin-typescript';
@@ -127,6 +127,10 @@ export function makeTerserPlugin() {
           '_cssText',
           // We want to keep the _integrations variable unmangled to send all installed integrations from replay
           '_integrations',
+          // _meta is used to store metadata of replay network events
+          '_meta',
+          // Object we inject debug IDs into with bundler plugins
+          '_sentryDebugIds',
         ],
       },
     },
@@ -178,5 +182,9 @@ export function makeTSPlugin(jsVersion) {
 
 // We don't pass these plugins any options which need to be calculated or changed by us, so no need to wrap them in
 // another factory function, as they are themselves already factory functions.
-export { resolve as makeNodeResolvePlugin };
+
+export function makeNodeResolvePlugin() {
+  return nodeResolve();
+}
+
 export { commonjs as makeCommonJSPlugin };

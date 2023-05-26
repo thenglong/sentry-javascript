@@ -5,12 +5,21 @@ import { captureException } from '@sentry/node';
 import { addExceptionMechanism, dynamicSamplingContextToSentryBaggageHeader, objectify } from '@sentry/utils';
 import type { Handle, ResolveOptions } from '@sveltejs/kit';
 
+import { isHttpError, isRedirect } from '../common/utils';
 import { getTracePropagationData } from './utils';
 
 function sendErrorToSentry(e: unknown): unknown {
   // In case we have a primitive, wrap it in the equivalent wrapper class (string -> String, etc.) so that we can
   // store a seen flag on it.
   const objectifiedErr = objectify(e);
+
+  // similarly to the `load` function, we don't want to capture 4xx errors or redirects
+  if (
+    isRedirect(objectifiedErr) ||
+    (isHttpError(objectifiedErr) && objectifiedErr.status < 500 && objectifiedErr.status >= 400)
+  ) {
+    return objectifiedErr;
+  }
 
   captureException(objectifiedErr, scope => {
     scope.addEventProcessor(event => {
@@ -53,13 +62,17 @@ export const transformPageChunk: NonNullable<ResolveOptions['transformPageChunk'
  * // src/hooks.server.ts
  * import { sentryHandle } from '@sentry/sveltekit';
  *
- * export const handle = sentryHandle;
+ * export const handle = sentryHandle();
  *
  * // Optionally use the sequence function to add additional handlers.
- * // export const handle = sequence(sentryHandle, yourCustomHandle);
+ * // export const handle = sequence(sentryHandle(), yourCustomHandler);
  * ```
  */
-export const sentryHandle: Handle = input => {
+export function sentryHandle(): Handle {
+  return sentryRequestHandler;
+}
+
+const sentryRequestHandler: Handle = input => {
   // if there is an active transaction, we know that this handle call is nested and hence
   // we don't create a new domain for it. If we created one, nested server calls would
   // create new transactions instead of adding a child span to the currently active span.

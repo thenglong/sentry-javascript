@@ -280,6 +280,92 @@ describe('NodeClient', () => {
       expect(event.server_name).not.toEqual('bar');
     });
   });
+
+  describe('captureCheckIn', () => {
+    it('sends a checkIn envelope', () => {
+      const options = getDefaultNodeClientOptions({
+        dsn: PUBLIC_DSN,
+        serverName: 'bar',
+        release: '1.0.0',
+        environment: 'dev',
+      });
+      client = new NodeClient(options);
+
+      // @ts-ignore accessing private method
+      const sendEnvelopeSpy = jest.spyOn(client, '_sendEnvelope');
+
+      const id = client.captureCheckIn(
+        { monitorSlug: 'foo', status: 'in_progress' },
+        {
+          schedule: {
+            type: 'crontab',
+            value: '0 * * * *',
+          },
+          checkinMargin: 2,
+          maxRuntime: 12333,
+          timezone: 'Canada/Eastern',
+        },
+      );
+
+      expect(sendEnvelopeSpy).toHaveBeenCalledTimes(1);
+      expect(sendEnvelopeSpy).toHaveBeenCalledWith([
+        expect.any(Object),
+        [
+          [
+            expect.any(Object),
+            {
+              check_in_id: id,
+              monitor_slug: 'foo',
+              status: 'in_progress',
+              release: '1.0.0',
+              environment: 'dev',
+              monitor_config: {
+                schedule: {
+                  type: 'crontab',
+                  value: '0 * * * *',
+                },
+                checkin_margin: 2,
+                max_runtime: 12333,
+                timezone: 'Canada/Eastern',
+              },
+            },
+          ],
+        ],
+      ]);
+
+      client.captureCheckIn({ monitorSlug: 'foo', status: 'ok', duration: 1222, checkInId: id });
+
+      expect(sendEnvelopeSpy).toHaveBeenCalledTimes(2);
+      expect(sendEnvelopeSpy).toHaveBeenCalledWith([
+        expect.any(Object),
+        [
+          [
+            expect.any(Object),
+            {
+              check_in_id: id,
+              monitor_slug: 'foo',
+              duration: 1222,
+              status: 'ok',
+              release: '1.0.0',
+              environment: 'dev',
+            },
+          ],
+        ],
+      ]);
+    });
+
+    it('does not send a checkIn envelope if disabled', () => {
+      const options = getDefaultNodeClientOptions({ dsn: PUBLIC_DSN, serverName: 'bar', enabled: false });
+      client = new NodeClient(options);
+
+      // @ts-ignore accessing private method
+      const sendEnvelopeSpy = jest.spyOn(client, '_sendEnvelope');
+
+      client.captureCheckIn({ monitorSlug: 'foo', status: 'in_progress' });
+
+      expect(sendEnvelopeSpy).toHaveBeenCalledTimes(0);
+    });
+  });
 });
 
 describe('flush/close', () => {

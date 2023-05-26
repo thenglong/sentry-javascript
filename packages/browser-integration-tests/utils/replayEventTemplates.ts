@@ -38,7 +38,6 @@ const DEFAULT_REPLAY_EVENT = {
     },
   },
   platform: 'javascript',
-  contexts: { replay: { session_sample_rate: 1, error_sample_rate: 0 } },
 };
 
 /**
@@ -156,8 +155,20 @@ export const expectedFetchPerformanceSpan = {
   data: {
     method: 'POST',
     statusCode: 200,
-    request: { size: 3, headers: {} },
-    response: { size: 11, headers: { 'content-length': '11', 'content-type': 'application/json' } },
+    request: {
+      size: 3,
+      headers: {},
+      _meta: {
+        warnings: ['URL_SKIPPED'],
+      },
+    },
+    response: {
+      size: 11,
+      headers: {},
+      _meta: {
+        warnings: ['URL_SKIPPED'],
+      },
+    },
   },
 };
 
@@ -169,7 +180,19 @@ export const expectedXHRPerformanceSpan = {
   data: {
     method: 'GET',
     statusCode: 200,
-    response: { size: 11, headers: { 'content-length': '11', 'content-type': 'application/json' } },
+    request: {
+      headers: {},
+      _meta: {
+        warnings: ['URL_SKIPPED'],
+      },
+    },
+    response: {
+      size: 11,
+      headers: {},
+      _meta: {
+        warnings: ['URL_SKIPPED'],
+      },
+    },
   },
 };
 

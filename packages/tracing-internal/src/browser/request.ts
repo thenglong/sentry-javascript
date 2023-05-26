@@ -10,7 +10,7 @@ import {
   stringMatchesSomePattern,
 } from '@sentry/utils';
 
-export const DEFAULT_TRACE_PROPAGATION_TARGETS = ['localhost', /^\//];
+export const DEFAULT_TRACE_PROPAGATION_TARGETS = ['localhost', /^\/(?!\/)/];
 
 /** Options for Request Instrumentation */
 export interface RequestInstrumentationOptions {
@@ -175,6 +175,15 @@ export function fetchCallback(
         // TODO (kmclb) remove this once types PR goes through
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         span.setHttpStatus(handlerData.response.status);
+
+        const contentLength: string =
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          handlerData.response && handlerData.response.headers && handlerData.response.headers.get('content-length');
+
+        const contentLengthNum = parseInt(contentLength);
+        if (contentLengthNum > 0) {
+          span.setData('http.response_content_length', contentLengthNum);
+        }
       } else if (handlerData.error) {
         span.setStatus('internal_error');
       }
@@ -191,12 +200,14 @@ export function fetchCallback(
   const activeTransaction = currentSpan && currentSpan.transaction;
 
   if (currentSpan && activeTransaction) {
+    const { method, url } = handlerData.fetchData;
     const span = currentSpan.startChild({
       data: {
-        ...handlerData.fetchData,
+        url,
         type: 'fetch',
+        'http.method': method,
       },
-      description: `${handlerData.fetchData.method} ${handlerData.fetchData.url}`,
+      description: `${method} ${url}`,
       op: 'http.client',
     });
 
@@ -334,7 +345,7 @@ export function xhrCallback(
       data: {
         ...sentryXhrData.data,
         type: 'xhr',
-        method: sentryXhrData.method,
+        'http.method': sentryXhrData.method,
         url: sentryXhrData.url,
       },
       description: `${sentryXhrData.method} ${sentryXhrData.url}`,

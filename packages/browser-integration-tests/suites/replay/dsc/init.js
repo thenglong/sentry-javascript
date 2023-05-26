@@ -13,11 +13,7 @@ Sentry.init({
   integrations: [new Integrations.BrowserTracing({ tracingOrigins: [/.*/] }), window.Replay],
   environment: 'production',
   tracesSampleRate: 1,
+  // Needs manual start!
   replaysSessionSampleRate: 0.0,
-  replaysOnErrorSampleRate: 1.0,
-});
-
-Sentry.configureScope(scope => {
-  scope.setUser({ id: 'user123', segment: 'segmentB' });
-  scope.setTransactionName('testTransactionDSC');
+  replaysOnErrorSampleRate: 0.0,
 });

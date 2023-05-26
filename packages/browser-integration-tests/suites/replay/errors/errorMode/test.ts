@@ -59,6 +59,8 @@ sentryTest(
     await page.click('#error');
     const req0 = await reqPromise0;
 
+    expect(callsToSentry).toEqual(2); // 1 error, 1 replay event
+
     await page.click('#go-background');
     const req1 = await reqPromise1;
     await reqErrorPromise;
@@ -82,9 +84,8 @@ sentryTest(
 
     expect(event0).toEqual(
       getExpectedReplayEvent({
-        contexts: { replay: { error_sample_rate: 1, session_sample_rate: 0 } },
         error_ids: [errorEventId!],
-        replay_type: 'error',
+        replay_type: 'buffer',
       }),
     );
 
@@ -117,8 +118,7 @@ sentryTest(
 
     expect(event1).toEqual(
       getExpectedReplayEvent({
-        contexts: { replay: { error_sample_rate: 1, session_sample_rate: 0 } },
-        replay_type: 'error', // although we're in session mode, we still send 'error' as replay_type
+        replay_type: 'buffer', // although we're in session mode, we still send 'error' as replay_type
         segment_id: 1,
         urls: [],
       }),
@@ -132,8 +132,7 @@ sentryTest(
     // we continue recording everything
     expect(event2).toEqual(
       getExpectedReplayEvent({
-        contexts: { replay: { error_sample_rate: 1, session_sample_rate: 0 } },
-        replay_type: 'error',
+        replay_type: 'buffer',
         segment_id: 2,
         urls: [],
       }),

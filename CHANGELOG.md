@@ -4,6 +4,310 @@
 
 - "You miss 100 percent of the chances you don't take. — Wayne Gretzky" — Michael Scott
 
+## 7.60.1
+
+- fix(nextjs): Match folder paths with trailing separator (#8615)
+- fix(replay): Ignore clicks with `shift` pressed (#8648)
+- fix(replay): Use `session.started` for min/max duration check (#8617)
+
+## 7.60.0
+
+### Important Changes
+
+- **feat(replay): Ensure min/max duration when flushing (#8596)**
+
+We will not send replays that are <5s long anymore. Additionally, we also added further safeguards to avoid overly long (>1h) replays.
+You can optionally configure the min. replay duration (defaults to 5s):
+
+```js
+new Replay({
+  minReplayDuration: 10000 // in ms - note that this is capped at 15s max!
+})
+```
+
+### Other Changes
+
+- fix(profiling): Align to SDK selected time origin (#8599)
+- fix(replay): Ensure multi click has correct timestamps (#8591)
+- fix(utils): Truncate aggregate exception values (LinkedErrors) (#8593)
+
+## 7.59.3
+
+- fix(browser): 0 is a valid index (#8581)
+- fix(nextjs): Ensure Webpack plugin is available after dynamic require (#8584)
+- types(browser): Add browser profiling client options (#8565)
+
+## 7.59.2
+
+No changes. This release was published to fix publishing issues with 7.59.0 and 7.59.1.
+Please see [7.59.0](#7590) for the changes in that release.
+
+## 7.59.1
+
+No changes. This release was published to fix a publishing issue with 7.59.0.
+Please see [7.59.0](#7590) for the changes in that release.
+
+## 7.59.0
+
+### Important Changes
+
+- **- feat(remix): Add Remix v2 support (#8415)**
+
+This release adds support for Remix v2 future flags, in particular for new error handling utilities of Remix v2. We heavily recommend you switch to using `v2_errorBoundary` future flag to get the best error handling experience with Sentry.
+
+To capture errors from [v2 client-side ErrorBoundary](https://remix.run/docs/en/main/route/error-boundary-v2), you should define your own `ErrorBoundary` in `root.tsx` and use `Sentry.captureRemixErrorBoundaryError` helper to capture the error.
+
+```typescript
+// root.tsx
+import { captureRemixErrorBoundaryError } from "@sentry/remix";
+
+export const ErrorBoundary: V2_ErrorBoundaryComponent = () => {
+  const error = useRouteError();
+
+  captureRemixErrorBoundaryError(error);
+
+  return <div> ... </div>;
+};
+```
+
+For server-side errors, define a [`handleError`](https://remix.run/docs/en/main/file-conventions/entry.server#handleerror) function in your server entry point and use the `Sentry.captureRemixServerException` helper to capture the error.
+
+```ts
+// entry.server.tsx
+export function handleError(
+  error: unknown,
+  { request }: DataFunctionArgs
+): void {
+  if (error instanceof Error) {
+    Sentry.captureRemixServerException(error, "remix.server", request);
+  } else {
+    // Optionally capture non-Error objects
+    Sentry.captureException(error);
+  }
+}
+```
+
+For more details, see the Sentry [Remix SDK](https://docs.sentry.io/platforms/javascript/guides/remix/) documentation.
+
+### Other Changes
+
+- feat(core): Add `ModuleMetadata` integration (#8475)
+- feat(core): Allow multiplexed transport to send to multiple releases (#8559)
+- feat(tracing): Add more network timings to http calls (#8540)
+- feat(tracing): Bring http timings out of experiment (#8563)
+- fix(nextjs): Avoid importing `SentryWebpackPlugin` in dev mode (#8557)
+- fix(otel): Use `HTTP_URL` attribute for client requests (#8539)
+- fix(replay): Better session storage check (#8547)
+- fix(replay): Handle errors in `beforeAddRecordingEvent` callback (#8548)
+- fix(tracing): Improve network.protocol.version (#8502)
+
+## 7.58.1
+
+- fix(node): Set propagation context even when tracingOptions are not defined (#8517)
+
+## 7.58.0
+
+### Important Changes
+
+- **Performance Monitoring not required for Distributed Tracing**
+
+This release adds support for [distributed tracing](https://docs.sentry.io/platforms/javascript/usage/distributed-tracing/) without requiring performance monitoring to be active on the JavaScript SDKs (browser and node). This means even if there is no sampled transaction/span, the SDK will still propagate traces to downstream services. Distributed Tracing can be configured with the `tracePropagationTargets` option, which controls what requests to attach the `sentry-trace` and `baggage` HTTP headers to (which is what propagates tracing information).
+
+```js
+Sentry.init({
+  tracePropagationTargets: ["third-party-site.com", /^https:\/\/yourserver\.io\/api/],
+});
+```
+
+- feat(tracing): Add tracing without performance to browser and client Sveltekit (#8458)
+- feat(node): Add tracing without performance to Node http integration (#8450)
+- feat(node): Add tracing without performance to Node Undici (#8449)
+- feat(node): Populate propagation context using env variables (#8422)
+
+- **feat(core): Support `AggregateErrors` in `LinkedErrors` integration (#8463)**
+
+This release adds support for [`AggregateErrors`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError). AggregateErrors are considered as Exception Groups by Sentry, and will be visualized and grouped differently. See the [Exception Groups Changelog Post](https://changelog.getsentry.com/announcements/exception-groups-now-supported-for-python-and-net) for more details.
+
+Exception Group support requires Self-Hosted Sentry [version 23.5.1](https://github.com/getsentry/self-hosted/releases/tag/23.5.1) or newer.
+
+- **feat(replay): Add a new option `networkDetailDenyUrls` (#8439)**
+
+This release adds a new option `networkDetailDenyUrls` to the `Replay` integration. This option allows you to specify a list of URLs that should not be captured by the `Replay` integration, which can be used alongside the existing `networkDetailAllowUrls` for finely grained control of which URLs should have network details captured.
+
+```js
+Sentry.init({
+  integrations: [
+    new Sentry.Integrations.Replay({
+      networkDetailDenyUrls: [/^http:\/\/example.com\/test$/],
+    }),
+  ],
+});
+```
+
+### Other Changes
+
+- feat(core): Add helpers to get module metadata from injected code (#8438)
+- feat(core): Add sampling decision to trace envelope header (#8483)
+- feat(node): Add trace context to checkin (#8503)
+- feat(node): Export `getModule` for Electron SDK (#8488)
+- feat(types): Allow `user.id` to be a number (#8330)
+- fix(browser): Set anonymous `crossorigin` attribute on report dialog (#8424)
+- fix(nextjs): Ignore `tunnelRoute` when doing static exports (#8471)
+- fix(nextjs): Use `basePath` option for `tunnelRoute` (#8454)
+- fix(node): Apply source context to linked errors even when it is uncached (#8453)
+- fix(node): report errorMiddleware errors as unhandled (#8048)
+- fix(react): Add support for `basename` option of `createBrowserRouter` (#8457)
+- fix(remix): Add explicit `@sentry/node` exports. (#8509)
+- fix(remix): Don't inject trace/baggage to `redirect` and `catch` responses (#8467)
+- fix(replay): Adjust slow/multi click handling (#8380)
+
+Work in this release contributed by @mrdulin, @donaldxdonald & @ziyad-elabid-nw. Thank you for your contributions!
+
+## 7.57.0
+
+### Important Changes
+
+- **build: Update typescript from 3.8.3 to 4.9.5 (#8255)**
+
+This release version [bumps the internally used typescript version from 3.8.x to 4.9.x](https://github.com/getsentry/sentry-javascript/pull/8255).
+We use ds-downlevel to generate two versions of our types, one for >=3.8, one for >=4.9.
+This means that this change should be fully backwards compatible and not have any noticable user impact,
+but if you still encounter issues please let us know.
+
+- **feat(types): Add tracePropagationTargets to top level options (#8395)**
+
+Instead of passing `tracePropagationTargets` to the `BrowserTracing` integration, you can now define them on the top level:
+
+```js
+Sentry.init({
+  tracePropagationTargets: ['api.site.com'],
+});
+```
+
+- **fix(angular): Filter out `TryCatch` integration by default (#8367)**
+
+The Angular and Angular-ivy SDKs will not install the TryCatch integration anymore by default.
+This integration conflicted with the `SentryErrorHander`, sometimes leading to duplicated errors and/or missing data on events.
+
+- **feat(browser): Better event name handling for non-Error objects (#8374)**
+
+When capturing non-errors via `Sentry.captureException()`, e.g. `Sentry.captureException({ prop: "custom object" })`,
+we now generate a more helpful value for the synthetic exception. Instead of e.g. `Non-Error exception captured with keys: currentTarget, isTrusted, target, type`, you'll now get messages like:
+
+```
+Object captured as exception with keys: prop1, prop2
+Event `MouseEvent` (type=click) captured as exception
+Event `ErrorEvent` captured as exception with message `Script error.`
+```
+
+### Other Changes
+
+- feat(browser): Send profiles in same envelope as transactions (#8375)
+- feat(profiling): Collect timings on profiler stop calls (#8409)
+- feat(replay): Do not capture replays < 5 seconds (GA) (#8277)
+- feat(tracing): Add experiment to capture http timings (#8371)
+- feat(tracing): Add `http.response.status_code` to `span.data` (#8366)
+- fix(angular): Stop routing spans on navigation cancel and error events (#8369)
+- fix(core): Only start spans in `trace` if tracing is enabled (#8357)
+- fix(nextjs): Inject init calls via loader instead of via entrypoints (#8368)
+- fix(replay): Mark ui.slowClickDetected `clickCount` as optional (#8376)
+- fix(serverless): Export `autoDiscoverNodePerformanceMonitoringIntegrations` from SDK (#8382)
+- fix(sveltekit): Check for cached requests in client-side fetch instrumentation (#8391)
+- fix(sveltekit): Only instrument SvelteKit `fetch` if the SDK client is valid (#8381)
+- fix(tracing): Instrument Prisma client in constructor of integration (#8383)
+- ref(replay): More graceful `sessionStorage` check (#8394)
+- ref(replay): Remove circular dep in replay eventBuffer (#8389)
+
+## 7.56.0
+
+- feat(replay): Rework slow click & multi click detection (#8322)
+- feat(replay): Stop replay when event buffer exceeds max. size (#8315)
+- feat(replay): Consider `window.open` for slow clicks (#8308)
+- fix(core): Temporarily store debug IDs in stack frame and only put them into `debug_meta` before sending (#8347)
+- fix(remix): Extract deferred responses correctly in root loaders. (#8305)
+- fix(vue): Don't call `next` in Vue router 4 instrumentation (#8351)
+
+## 7.55.2
+
+- fix(replay): Stop exporting `EventType` from `@sentry-internal/rrweb` (#8334)
+- fix(serverless): Export captureCheckIn (#8333)
+
+## 7.55.1
+
+- fix(replay): Do not export types from `@sentry-internal/rrweb` (#8329)
+
+## 7.55.0
+
+- feat(replay): Capture slow clicks (GA) (#8298)
+- feat(replay): Improve types for replay recording events (#8224)
+- fix(nextjs): Strip query params from transaction names of navigations to unknown routes (#8278)
+- fix(replay): Ignore max session life for buffered sessions (#8258)
+- fix(sveltekit): Export captureCheckIn (#8313)
+- ref(svelte): Add Svelte 4 as a peer dependency (#8280)
+
+## 7.54.0
+
+### Important Changes
+
+- **feat(core): Add default entries to `ignoreTransactions` for Healthchecks #8191**
+
+  All SDKs now filter out health check transactions by default.
+  These are transactions where the transaction name matches typical API health check calls, such as `/^.*healthy.*$/` or `/^.  *heartbeat.*$/`. Take a look at [this list](https://github.com/getsentry/sentry-javascript/blob/8c6ad156829f7c4eec34e4a67e6dd866ba482d5d/packages/core/src/integrations/inboundfilters.ts#L8C2-L16) to learn which regexes we currently use to match transaction names.
+  We believe that these transactions do not provide value in most cases and we want to save you some of your quota by   filtering them out by default.
+  These filters are implemented as default values for the top level `ignoreTransactions` option.
+
+  You can disable this filtering by manually specifiying the `InboundFilters` integration and setting the   `disableTransactionDefaults` option:
+  ```js
+  Sentry.init({
+    //...
+    integrations: [new InboundFilters({ disableTransactionDefaults: true })],
+  })
+  ```
+
+- **feat(replay): Add `mutationBreadcrumbLimit` and `mutationLimit` to Replay Options (#8228)**
+
+  The previously experimental options `mutationBreadcumbLimit` and `mutationLimit` have been promoted to regular Replay   integration options.
+
+  A high number of DOM mutations (in a single event loop) can cause performance regressions in end-users' browsers.
+  Use `mutationBreadcrumbLimit` to send a breadcrumb along with your recording if the mutation limit was reached.
+  Use `mutationLimit` to stop recording if the mutation limit was reached.
+
+- **feat(sveltekit): Add source maps support for Vercel (lambda) (#8256)**
+  - feat(sveltekit): Auto-detect SvelteKit adapters (#8193)
+
+  The SvelteKit SDK can now be used if you deploy your SvelteKit app to Vercel.
+  By default, the SDK's Vite plugin will detect the used adapter and adjust the source map uploading config as necessary.
+  If you want to override the default adapter detection, you can specify the `adapter` option in the `sentrySvelteKit`  options:
+
+  ```js
+  // vite.config.js
+  export default defineConfig({
+    plugins: [
+      sentrySvelteKit({
+        adapter: 'vercel',
+      }),
+      sveltekit(),
+    ],
+  });
+  ```
+
+  Currently, the Vite plugin will configure itself correctly for `@sveltejs/adapter-auto`, `@sveltejs/adapter-vercel` and `@sveltejs/adapter-node`.
+
+  **Important:** The SvelteKit SDK is not yet compatible with Vercel's edge runtime.
+  It will only work for lambda functions.
+
+### Other Changes
+
+- feat(replay): Throttle breadcrumbs to max 300/5s (#8086)
+- feat(sveltekit): Add option to control handling of unknown server routes (#8201)
+- fix(node): Strip query and fragment from request URLs without route parameters (#8213)
+- fix(remix): Don't log missing parameters warning on server-side. (#8269)
+- fix(remix): Pass `loadContext` through wrapped document request function (#8268)
+- fix(replay): Guard against missing key (#8246)
+- fix(sveltekit): Avoid capturing redirects and 4xx Http errors in request Handlers (#8215)
+- fix(sveltekit): Bump `magicast` to support `satisfied` keyword (#8254)
+- fix(wasm): Avoid throwing an error when WASM modules are loaded from blobs (#8263)
+
 ## 7.53.1
 
 - chore(deps): bump socket.io-parser from 4.2.1 to 4.2.3 (#8196)

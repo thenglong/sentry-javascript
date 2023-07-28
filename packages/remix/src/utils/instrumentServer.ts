@@ -5,20 +5,23 @@ import { captureException, getCurrentHub } from '@sentry/node';
 import type { Transaction, TransactionSource, WrappedFunction } from '@sentry/types';
 import {
   addExceptionMechanism,
-  baggageHeaderToDynamicSamplingContext,
   dynamicSamplingContextToSentryBaggageHeader,
-  extractTraceparentData,
   fill,
   isNodeEnv,
   loadModule,
   logger,
+  tracingContextFromHeaders,
 } from '@sentry/utils';
 
+import { getFutureFlagsServer } from './futureFlags';
+import { extractData, getRequestMatch, isDeferredData, isResponse, json, matchServerRoutes } from './vendor/response';
 import type {
   AppData,
   CreateRequestHandlerFunction,
   DataFunction,
   DataFunctionArgs,
+  EntryContext,
+  FutureConfig,
   HandleDocumentRequestFunction,
   ReactRouterDomPkg,
   RemixRequest,
@@ -26,9 +29,10 @@ import type {
   ServerBuild,
   ServerRoute,
   ServerRouteManifest,
-} from './types';
-import { extractData, getRequestMatch, isResponse, json, matchServerRoutes } from './vendor/response';
+} from './vendor/types';
 import { normalizeRemixRequest } from './web-fetch';
+
+let FUTURE_FLAGS: FutureConfig | undefined;
 
 // Flag to track if the core request handler is instrumented.
 export let isRequestHandlerWrapped = false;
@@ -56,7 +60,16 @@ async function extractResponseError(response: Response): Promise<unknown> {
   return responseData;
 }
 
-async function captureRemixServerException(err: Error, name: string, request: Request): Promise<void> {
+/**
+ * Captures an exception happened in the Remix server.
+ *
+ * @param err The error to capture.
+ * @param name The name of the origin function.
+ * @param request The request object.
+ *
+ * @returns A promise that resolves when the exception is captured.
+ */
+export async function captureRemixServerException(err: unknown, name: string, request: Request): Promise<void> {
   // Skip capturing if the thrown error is not a 5xx response
   // https://remix.run/docs/en/v1/api/conventions#throwing-responses-in-loaders
   if (isResponse(err) && err.status < 500) {
@@ -112,7 +125,8 @@ function makeWrappedDocumentRequestFunction(
     request: Request,
     responseStatusCode: number,
     responseHeaders: Headers,
-    context: Record<symbol, unknown>,
+    context: EntryContext,
+    loadContext?: Record<string, unknown>,
   ): Promise<Response> {
     let res: Response;
 
@@ -120,7 +134,7 @@ function makeWrappedDocumentRequestFunction(
     const currentScope = getCurrentHub().getScope();
 
     if (!currentScope) {
-      return origDocumentRequestFunction.call(this, request, responseStatusCode, responseHeaders, context);
+      return origDocumentRequestFunction.call(this, request, responseStatusCode, responseHeaders, context, loadContext);
     }
 
     try {
@@ -133,11 +147,21 @@ function makeWrappedDocumentRequestFunction(
         },
       });
 
-      res = await origDocumentRequestFunction.call(this, request, responseStatusCode, responseHeaders, context);
+      res = await origDocumentRequestFunction.call(
+        this,
+        request,
+        responseStatusCode,
+        responseHeaders,
+        context,
+        loadContext,
+      );
 
       span?.finish();
     } catch (err) {
-      await captureRemixServerException(err, 'documentRequest', request);
+      if (!FUTURE_FLAGS?.v2_errorBoundary) {
+        await captureRemixServerException(err, 'documentRequest', request);
+      }
+
       throw err;
     }
 
@@ -174,7 +198,10 @@ function makeWrappedDataFunction(origFn: DataFunction, id: string, name: 'action
       currentScope.setSpan(activeTransaction);
       span?.finish();
     } catch (err) {
-      await captureRemixServerException(err, name, args.request);
+      if (!FUTURE_FLAGS?.v2_errorBoundary) {
+        await captureRemixServerException(err, name, args.request);
+      }
+
       throw err;
     }
 
@@ -221,18 +248,33 @@ function makeWrappedRootLoader(origLoader: DataFunction): DataFunction {
     const res = await origLoader.call(this, args);
     const traceAndBaggage = getTraceAndBaggage();
 
-    // Note: `redirect` and `catch` responses do not have bodies to extract
-    if (isResponse(res) && !isRedirectResponse(res) && !isCatchResponse(res)) {
-      const data = await extractData(res);
+    if (isDeferredData(res)) {
+      return {
+        ...res.data,
+        ...traceAndBaggage,
+      };
+    }
 
-      if (typeof data === 'object') {
-        return json(
-          { ...data, ...traceAndBaggage },
-          { headers: res.headers, statusText: res.statusText, status: res.status },
-        );
-      } else {
-        __DEBUG_BUILD__ && logger.warn('Skipping injection of trace and baggage as the response body is not an object');
+    if (isResponse(res)) {
+      // Note: `redirect` and `catch` responses do not have bodies to extract.
+      // We skip injection of trace and baggage in those cases.
+      // For `redirect`, a valid internal redirection target will have the trace and baggage injected.
+      if (isRedirectResponse(res) || isCatchResponse(res)) {
+        __DEBUG_BUILD__ && logger.warn('Skipping injection of trace and baggage as the response does not have a body');
         return res;
+      } else {
+        const data = await extractData(res);
+
+        if (typeof data === 'object') {
+          return json(
+            { ...data, ...traceAndBaggage },
+            { headers: res.headers, statusText: res.statusText, status: res.status },
+          );
+        } else {
+          __DEBUG_BUILD__ &&
+            logger.warn('Skipping injection of trace and baggage as the response body is not an object');
+          return res;
+        }
       }
     }
 
@@ -274,9 +316,11 @@ export function startRequestHandlerTransaction(
     method: string;
   },
 ): Transaction {
-  // If there is a trace header set, we extract the data from it (parentSpanId, traceId, and sampling decision)
-  const traceparentData = extractTraceparentData(request.headers['sentry-trace']);
-  const dynamicSamplingContext = baggageHeaderToDynamicSamplingContext(request.headers.baggage);
+  const { traceparentData, dynamicSamplingContext, propagationContext } = tracingContextFromHeaders(
+    request.headers['sentry-trace'],
+    request.headers.baggage,
+  );
+  hub.getScope().setPropagationContext(propagationContext);
 
   const transaction = hub.startTransaction({
     name,
@@ -291,7 +335,7 @@ export function startRequestHandlerTransaction(
     },
   });
 
-  hub.getScope()?.setSpan(transaction);
+  hub.getScope().setSpan(transaction);
   return transaction;
 }
 
@@ -414,6 +458,7 @@ function makeWrappedCreateRequestHandler(
   isRequestHandlerWrapped = true;
 
   return function (this: unknown, build: ServerBuild, ...args: unknown[]): RequestHandler {
+    FUTURE_FLAGS = getFutureFlagsServer(build);
     const newBuild = instrumentBuild(build);
     const requestHandler = origCreateRequestHandler.call(this, newBuild, ...args);
 

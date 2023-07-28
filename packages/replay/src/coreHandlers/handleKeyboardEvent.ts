@@ -12,7 +12,10 @@ export function handleKeyboardEvent(replay: ReplayContainer, event: KeyboardEven
     return;
   }
 
-  replay.triggerUserActivity();
+  // Update user activity, but do not restart recording as it can create
+  // noisy/low-value replays (e.g. user comes back from idle, hits alt-tab, new
+  // session with a single "keydown" breadcrumb is created)
+  replay.updateUserActivity();
 
   const breadcrumb = getKeyboardBreadcrumb(event);
 
@@ -28,7 +31,7 @@ export function getKeyboardBreadcrumb(event: KeyboardEvent): Breadcrumb | null {
   const { metaKey, shiftKey, ctrlKey, altKey, key, target } = event;
 
   // never capture for input fields
-  if (!target || isInputElement(target as HTMLElement)) {
+  if (!target || isInputElement(target as HTMLElement) || !key) {
     return null;
   }
 

@@ -27,6 +27,12 @@ vi.mock('@sentry/svelte', async () => {
   };
 });
 
+vi.mock('../../src/client/vendor/lookUpCache', () => {
+  return {
+    isRequestCached: () => false,
+  };
+});
+
 const mockTrace = vi.fn();
 
 const mockedBrowserTracing = {
@@ -52,6 +58,13 @@ const mockedGetIntegrationById = vi.fn(id => {
   return undefined;
 });
 
+const mockedGetClient = vi.fn(() => {
+  return {
+    getIntegrationById: mockedGetIntegrationById,
+    getOptions: () => ({}),
+  };
+});
+
 vi.mock('@sentry/core', async () => {
   const original = (await vi.importActual('@sentry/core')) as any;
   return {
@@ -62,13 +75,14 @@ vi.mock('@sentry/core', async () => {
     },
     getCurrentHub: () => {
       return {
-        getClient: () => {
-          return {
-            getIntegrationById: mockedGetIntegrationById,
-          };
-        },
+        getClient: mockedGetClient,
         getScope: () => {
           return {
+            getPropagationContext: () => ({
+              traceId: '1234567890abcdef1234567890abcdef',
+              spanId: '1234567890abcdef',
+              sampled: false,
+            }),
             getSpan: () => {
               return {
                 transaction: {
@@ -363,7 +377,7 @@ describe('wrapLoadWithSentry', () => {
         mockedBrowserTracing.options.traceFetch = true;
       });
 
-      it("doesn't create a span nor propagate headers, if `shouldCreateSpanForRequest` returns false", async () => {
+      it("doesn't create a span if `shouldCreateSpanForRequest` returns false", async () => {
         mockedBrowserTracing.options.shouldCreateSpanForRequest = () => false;
 
         const wrappedLoad = wrapLoadWithSentry(load);
@@ -381,10 +395,6 @@ describe('wrapLoadWithSentry', () => {
           },
           expect.any(Function),
           expect.any(Function),
-        );
-
-        expect(mockedSveltekitFetch).toHaveBeenCalledWith(
-          ...[originalFetchArgs[0], originalFetchArgs.length === 2 ? originalFetchArgs[1] : {}],
         );
 
         mockedBrowserTracing.options.shouldCreateSpanForRequest = () => true;
@@ -425,6 +435,27 @@ describe('wrapLoadWithSentry', () => {
         mockedBreadcrumbs.options.fetch = true;
       });
     });
+  });
+
+  it.each([
+    ['is undefined', undefined],
+    ["doesn't have a `getClientById` method", {}],
+  ])("doesn't instrument fetch if the client %s", async (_, client) => {
+    mockedGetClient.mockImplementationOnce(() => client);
+
+    async function load(_event: Parameters<Load>[0]): Promise<ReturnType<Load>> {
+      return {
+        msg: 'hi',
+      };
+    }
+    const wrappedLoad = wrapLoadWithSentry(load);
+
+    const originalFetch = MOCK_LOAD_ARGS.fetch;
+    await wrappedLoad(MOCK_LOAD_ARGS);
+
+    expect(MOCK_LOAD_ARGS.fetch).toStrictEqual(originalFetch);
+
+    expect(mockTrace).toHaveBeenCalledTimes(1);
   });
 
   it('adds an exception mechanism', async () => {

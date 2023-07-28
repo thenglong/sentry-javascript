@@ -492,6 +492,28 @@ describe('BaseClient', () => {
       );
     });
 
+    test('it adds a trace context all events', () => {
+      expect.assertions(1);
+
+      const options = getDefaultTestClientOptions({ dsn: PUBLIC_DSN });
+      const client = new TestClient(options);
+      const scope = new Scope();
+
+      client.captureEvent({ message: 'message' }, { event_id: 'wat' }, scope);
+
+      expect(TestClient.instance!.event!).toEqual(
+        expect.objectContaining({
+          contexts: {
+            trace: {
+              parent_span_id: undefined,
+              span_id: expect.any(String),
+              trace_id: expect.any(String),
+            },
+          },
+        }),
+      );
+    });
+
     test('adds `event_id` from hint if available', () => {
       expect.assertions(1);
 
@@ -1651,7 +1673,7 @@ describe('BaseClient', () => {
         }),
       );
 
-      // @ts-ignore
+      // @ts-expect-error Accessing private transport API
       const mockSend = jest.spyOn(client._transport, 'send');
 
       const errorEvent: Event = { message: 'error' };
@@ -1679,7 +1701,7 @@ describe('BaseClient', () => {
         }),
       );
 
-      // @ts-ignore
+      // @ts-expect-error Accessing private transport API
       const mockSend = jest.spyOn(client._transport, 'send');
 
       const transactionEvent: Event = { type: 'transaction', event_id: 'tr1' };
@@ -1709,7 +1731,7 @@ describe('BaseClient', () => {
         }),
       );
 
-      // @ts-ignore
+      // @ts-expect-error Accessing private transport API
       const mockSend = jest.spyOn(client._transport, 'send').mockImplementation(() => {
         return Promise.reject('send error');
       });
@@ -1741,7 +1763,7 @@ describe('BaseClient', () => {
         }),
       );
 
-      // @ts-ignore
+      // @ts-expect-error Accessing private transport API
       const mockSend = jest.spyOn(client._transport, 'send').mockImplementation(() => {
         return Promise.resolve({ statusCode: 200 });
       });

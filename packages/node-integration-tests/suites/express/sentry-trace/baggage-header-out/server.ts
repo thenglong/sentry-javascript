@@ -12,6 +12,7 @@ Sentry.init({
   dsn: 'https://public@dsn.ingest.sentry.io/1337',
   release: '1.0',
   environment: 'prod',
+  tracePropagationTargets: [/^(?!.*express).*$/],
   // eslint-disable-next-line deprecation/deprecation
   integrations: [new Sentry.Integrations.Http({ tracing: true }), new Tracing.Integrations.Express({ app })],
   tracesSampleRate: 1.0,
@@ -25,7 +26,7 @@ app.use(Sentry.Handlers.tracingHandler());
 app.use(cors());
 
 app.get('/test/express', (_req, res) => {
-  const transaction = Sentry.getCurrentHub().getScope()?.getTransaction();
+  const transaction = Sentry.getCurrentHub().getScope().getTransaction();
   if (transaction) {
     transaction.traceId = '86f39e84263a4de99c326acab3bfe3bd';
   }

@@ -1,14 +1,8 @@
 /* eslint-disable max-lines */
 import type { Hub, IdleTransaction } from '@sentry/core';
-import {
-  addTracingExtensions,
-  extractTraceparentData,
-  getActiveTransaction,
-  startIdleTransaction,
-  TRACING_DEFAULTS,
-} from '@sentry/core';
+import { addTracingExtensions, getActiveTransaction, startIdleTransaction, TRACING_DEFAULTS } from '@sentry/core';
 import type { EventProcessor, Integration, Transaction, TransactionContext, TransactionSource } from '@sentry/types';
-import { baggageHeaderToDynamicSamplingContext, getDomElement, logger } from '@sentry/utils';
+import { getDomElement, logger, tracingContextFromHeaders } from '@sentry/utils';
 
 import { registerBackgroundTabDetection } from './backgroundtab';
 import {
@@ -177,8 +171,18 @@ export class BrowserTracing implements Integration {
 
   private _collectWebVitals: () => void;
 
+  private _hasSetTracePropagationTargets: boolean = false;
+
   public constructor(_options?: Partial<BrowserTracingOptions>) {
     addTracingExtensions();
+
+    if (__DEBUG_BUILD__) {
+      this._hasSetTracePropagationTargets = !!(
+        _options &&
+        // eslint-disable-next-line deprecation/deprecation
+        (_options.tracePropagationTargets || _options.tracingOrigins)
+      );
+    }
 
     this.options = {
       ...DEFAULT_BROWSER_TRACING_OPTIONS,
@@ -214,6 +218,9 @@ export class BrowserTracing implements Integration {
    */
   public setupOnce(_: (callback: EventProcessor) => void, getCurrentHub: () => Hub): void {
     this._getCurrentHub = getCurrentHub;
+    const hub = getCurrentHub();
+    const client = hub.getClient();
+    const clientOptions = client && client.getOptions();
 
     const {
       routingInstrumentation: instrumentRouting,
@@ -222,10 +229,28 @@ export class BrowserTracing implements Integration {
       markBackgroundTransactions,
       traceFetch,
       traceXHR,
-      tracePropagationTargets,
       shouldCreateSpanForRequest,
+      enableHTTPTimings,
       _experiments,
     } = this.options;
+
+    const clientOptionsTracePropagationTargets = clientOptions && clientOptions.tracePropagationTargets;
+    // There are three ways to configure tracePropagationTargets:
+    // 1. via top level client option `tracePropagationTargets`
+    // 2. via BrowserTracing option `tracePropagationTargets`
+    // 3. via BrowserTracing option `tracingOrigins` (deprecated)
+    //
+    // To avoid confusion, favour top level client option `tracePropagationTargets`, and fallback to
+    // BrowserTracing option `tracePropagationTargets` and then `tracingOrigins` (deprecated).
+    // This is done as it minimizes bundle size (we don't have to have undefined checks).
+    //
+    // If both 1 and either one of 2 or 3 are set (from above), we log out a warning.
+    const tracePropagationTargets = clientOptionsTracePropagationTargets || this.options.tracePropagationTargets;
+    if (__DEBUG_BUILD__ && this._hasSetTracePropagationTargets && clientOptionsTracePropagationTargets) {
+      logger.warn(
+        '[Tracing] The `tracePropagationTargets` option was set in the BrowserTracing integration and top level `Sentry.init`. The top level `Sentry.init` value is being used.',
+      );
+    }
 
     instrumentRouting(
       (context: TransactionContext) => {
@@ -253,6 +278,7 @@ export class BrowserTracing implements Integration {
       traceXHR,
       tracePropagationTargets,
       shouldCreateSpanForRequest,
+      enableHTTPTimings,
     });
   }
 
@@ -264,24 +290,25 @@ export class BrowserTracing implements Integration {
       return undefined;
     }
 
+    const hub = this._getCurrentHub();
+
     const { beforeNavigate, idleTimeout, finalTimeout, heartbeatInterval } = this.options;
 
     const isPageloadTransaction = context.op === 'pageload';
 
-    const sentryTraceMetaTagValue = isPageloadTransaction ? getMetaContent('sentry-trace') : null;
-    const baggageMetaTagValue = isPageloadTransaction ? getMetaContent('baggage') : null;
-
-    const traceParentData = sentryTraceMetaTagValue ? extractTraceparentData(sentryTraceMetaTagValue) : undefined;
-    const dynamicSamplingContext = baggageMetaTagValue
-      ? baggageHeaderToDynamicSamplingContext(baggageMetaTagValue)
-      : undefined;
+    const sentryTrace = isPageloadTransaction ? getMetaContent('sentry-trace') : '';
+    const baggage = isPageloadTransaction ? getMetaContent('baggage') : '';
+    const { traceparentData, dynamicSamplingContext, propagationContext } = tracingContextFromHeaders(
+      sentryTrace,
+      baggage,
+    );
 
     const expandedContext: TransactionContext = {
       ...context,
-      ...traceParentData,
+      ...traceparentData,
       metadata: {
         ...context.metadata,
-        dynamicSamplingContext: traceParentData && !dynamicSamplingContext ? {} : dynamicSamplingContext,
+        dynamicSamplingContext: traceparentData && !dynamicSamplingContext ? {} : dynamicSamplingContext,
       },
       trimEnd: true,
     };
@@ -308,7 +335,6 @@ export class BrowserTracing implements Integration {
 
     __DEBUG_BUILD__ && logger.log(`[Tracing] Starting ${finalContext.op} transaction on scope`);
 
-    const hub = this._getCurrentHub();
     const { location } = WINDOW;
 
     const idleTransaction = startIdleTransaction(
@@ -320,6 +346,24 @@ export class BrowserTracing implements Integration {
       { location }, // for use in the tracesSampler
       heartbeatInterval,
     );
+
+    const scope = hub.getScope();
+
+    // If it's a pageload and there is a meta tag set
+    // use the traceparentData as the propagation context
+    if (isPageloadTransaction && traceparentData) {
+      scope.setPropagationContext(propagationContext);
+    } else {
+      // Navigation transactions should set a new propagation context based on the
+      // created idle transaction.
+      scope.setPropagationContext({
+        traceId: idleTransaction.traceId,
+        spanId: idleTransaction.spanId,
+        parentSpanId: idleTransaction.parentSpanId,
+        sampled: !!idleTransaction.sampled,
+      });
+    }
+
     idleTransaction.registerBeforeFinishCallback(transaction => {
       this._collectWebVitals();
       addPerformanceEntries(transaction);
@@ -391,11 +435,11 @@ export class BrowserTracing implements Integration {
 }
 
 /** Returns the value of a meta tag */
-export function getMetaContent(metaName: string): string | null {
+export function getMetaContent(metaName: string): string | undefined {
   // Can't specify generic to `getDomElement` because tracing can be used
   // in a variety of environments, have to disable `no-unsafe-member-access`
   // as a result.
   const metaTag = getDomElement(`meta[name=${metaName}]`);
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-  return metaTag ? metaTag.getAttribute('content') : null;
+  return metaTag ? metaTag.getAttribute('content') : undefined;
 }

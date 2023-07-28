@@ -19,6 +19,10 @@ const originalHttpGet = http.get;
 const originalHttpRequest = http.request;
 
 describe('tracing', () => {
+  afterEach(() => {
+    sentryCore.getCurrentHub().getScope().setSpan(undefined);
+  });
+
   function createTransactionOnScope(
     customOptions: Partial<NodeClientOptions> = {},
     customContext?: Partial<TransactionContext>,
@@ -49,9 +53,24 @@ describe('tracing', () => {
       ...customContext,
     });
 
-    hub.getScope()?.setSpan(transaction);
+    hub.getScope().setSpan(transaction);
 
     return transaction;
+  }
+
+  function getHub(customOptions: Partial<NodeClientOptions> = {}) {
+    const options = getDefaultNodeClientOptions({
+      dsn: 'https://dogsarebadatkeepingsecrets@squirrelchasers.ingest.sentry.io/12312012',
+      tracesSampleRate: 1.0,
+      integrations: [new HttpIntegration({ tracing: true })],
+      release: '1.0.0',
+      environment: 'production',
+      ...customOptions,
+    });
+    const hub = new Hub(new NodeClient(options));
+    jest.spyOn(sentryCore, 'getCurrentHub').mockReturnValue(hub);
+
+    return hub;
   }
 
   it("creates a span for each outgoing non-sentry request when there's a transaction on the scope", () => {
@@ -114,9 +133,10 @@ describe('tracing', () => {
     const baggageHeader = request.getHeader('baggage') as string;
 
     expect(baggageHeader).toEqual(
-      'sentry-environment=production,sentry-release=1.0.0,sentry-transaction=dogpark,' +
+      'sentry-environment=production,sentry-release=1.0.0,' +
         'sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,' +
-        'sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1',
+        'sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1,' +
+        'sentry-transaction=dogpark,sentry-sampled=true',
     );
   });
 
@@ -128,10 +148,10 @@ describe('tracing', () => {
     const request = http.get({ host: 'http://dogs.are.great/', headers: { baggage: 'dog=great' } });
     const baggageHeader = request.getHeader('baggage') as string;
 
-    expect(baggageHeader).toEqual([
-      'dog=great',
-      'sentry-environment=production,sentry-release=1.0.0,sentry-transaction=dogpark,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1',
-    ]);
+    expect(baggageHeader[0]).toEqual('dog=great');
+    expect(baggageHeader[1]).toEqual(
+      'sentry-environment=production,sentry-release=1.0.0,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1,sentry-transaction=dogpark,sentry-sampled=true',
+    );
   });
 
   it('adds the transaction name to the the baggage header if a valid transaction source is set', async () => {
@@ -144,7 +164,7 @@ describe('tracing', () => {
 
     expect(baggageHeader).toEqual([
       'dog=great',
-      'sentry-environment=production,sentry-release=1.0.0,sentry-transaction=dogpark,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1',
+      'sentry-environment=production,sentry-release=1.0.0,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1,sentry-transaction=dogpark,sentry-sampled=true',
     ]);
   });
 
@@ -158,8 +178,71 @@ describe('tracing', () => {
 
     expect(baggageHeader).toEqual([
       'dog=great',
-      'sentry-environment=production,sentry-release=1.0.0,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1',
+      'sentry-environment=production,sentry-release=1.0.0,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=12312012123120121231201212312012,sentry-sample_rate=1,sentry-sampled=true',
     ]);
+  });
+
+  it("doesn't attach baggage headers if already defined", () => {
+    nock('http://dogs.are.great').get('/').reply(200);
+
+    createTransactionOnScope();
+
+    const request = http.get({
+      host: 'http://dogs.are.great/',
+      headers: {
+        'sentry-trace': '12312012123120121231201212312012-1231201212312012-0',
+        baggage: 'sentry-environment=production,sentry-trace_id=12312012123120121231201212312012',
+      },
+    });
+    const baggage = request.getHeader('baggage');
+    expect(baggage).toEqual('sentry-environment=production,sentry-trace_id=12312012123120121231201212312012');
+  });
+
+  it('generates and uses propagation context to attach baggage and sentry-trace header', async () => {
+    nock('http://dogs.are.great').get('/').reply(200);
+
+    const { traceId } = sentryCore.getCurrentHub().getScope().getPropagationContext();
+
+    const request = http.get('http://dogs.are.great/');
+    const sentryTraceHeader = request.getHeader('sentry-trace') as string;
+    const baggageHeader = request.getHeader('baggage') as string;
+
+    const parts = sentryTraceHeader.split('-');
+    expect(parts.length).toEqual(3);
+    expect(parts[0]).toEqual(traceId);
+    expect(parts[1]).toEqual(expect.any(String));
+    expect(parts[2]).toEqual('0');
+
+    expect(baggageHeader).toEqual(
+      `sentry-environment=production,sentry-release=1.0.0,sentry-user_segment=segmentA,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=${traceId}`,
+    );
+  });
+
+  it('uses incoming propagation context to attach baggage and sentry-trace', async () => {
+    nock('http://dogs.are.great').get('/').reply(200);
+
+    const hub = getHub();
+    hub.getScope().setPropagationContext({
+      traceId: '86f39e84263a4de99c326acab3bfe3bd',
+      spanId: '86f39e84263a4de9',
+      sampled: true,
+      dsc: {
+        trace_id: '86f39e84263a4de99c326acab3bfe3bd',
+        public_key: 'test-public-key',
+      },
+    });
+
+    const request = http.get('http://dogs.are.great/');
+    const sentryTraceHeader = request.getHeader('sentry-trace') as string;
+    const baggageHeader = request.getHeader('baggage') as string;
+
+    const parts = sentryTraceHeader.split('-');
+    expect(parts.length).toEqual(3);
+    expect(parts[0]).toEqual('86f39e84263a4de99c326acab3bfe3bd');
+    expect(parts[1]).toEqual(expect.any(String));
+    expect(parts[2]).toEqual('1');
+
+    expect(baggageHeader).toEqual('sentry-trace_id=86f39e84263a4de99c326acab3bfe3bd,sentry-public_key=test-public-key');
   });
 
   it("doesn't attach the sentry-trace header to outgoing sentry requests", () => {
@@ -266,13 +349,12 @@ describe('tracing', () => {
     function createTransactionAndPutOnScope(hub: Hub) {
       addTracingExtensions();
       const transaction = hub.startTransaction({ name: 'dogpark' });
-      hub.getScope()?.setSpan(transaction);
+      hub.getScope().setSpan(transaction);
       return transaction;
     }
 
-    // TODO (v8): These can be removed once we remove these properties from client options
     describe('as client options', () => {
-      it("doesn't create span if shouldCreateSpanForRequest returns false", () => {
+      it('creates span with propagation context if shouldCreateSpanForRequest returns false', () => {
         const url = 'http://dogs.are.great/api/v1/index/';
         nock(url).get(/.*/).reply(200);
 
@@ -295,8 +377,15 @@ describe('tracing', () => {
         expect(httpSpans.length).toBe(0);
 
         // And headers are not attached without span creation
-        expect(request.getHeader('sentry-trace')).toBeUndefined();
-        expect(request.getHeader('baggage')).toBeUndefined();
+        expect(request.getHeader('sentry-trace')).toBeDefined();
+        expect(request.getHeader('baggage')).toBeDefined();
+
+        const propagationContext = hub.getScope().getPropagationContext();
+
+        expect((request.getHeader('sentry-trace') as string).includes(propagationContext.traceId)).toBe(true);
+        expect(request.getHeader('baggage')).toEqual(
+          `sentry-environment=production,sentry-release=1.0.0,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=${propagationContext.traceId}`,
+        );
       });
 
       it.each([
@@ -366,7 +455,7 @@ describe('tracing', () => {
     });
 
     describe('as Http integration constructor options', () => {
-      it("doesn't create span if shouldCreateSpanForRequest returns false", () => {
+      it('creates span with propagation context if shouldCreateSpanForRequest returns false', () => {
         const url = 'http://dogs.are.great/api/v1/index/';
         nock(url).get(/.*/).reply(200);
 
@@ -393,8 +482,15 @@ describe('tracing', () => {
         expect(httpSpans.length).toBe(0);
 
         // And headers are not attached without span creation
-        expect(request.getHeader('sentry-trace')).toBeUndefined();
-        expect(request.getHeader('baggage')).toBeUndefined();
+        expect(request.getHeader('sentry-trace')).toBeDefined();
+        expect(request.getHeader('baggage')).toBeDefined();
+
+        const propagationContext = hub.getScope().getPropagationContext();
+
+        expect((request.getHeader('sentry-trace') as string).includes(propagationContext.traceId)).toBe(true);
+        expect(request.getHeader('baggage')).toEqual(
+          `sentry-environment=production,sentry-release=1.0.0,sentry-public_key=dogsarebadatkeepingsecrets,sentry-trace_id=${propagationContext.traceId}`,
+        );
       });
 
       it.each([

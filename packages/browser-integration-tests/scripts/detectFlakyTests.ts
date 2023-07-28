@@ -3,8 +3,6 @@ import * as path from 'path';
 import * as childProcess from 'child_process';
 import { promisify } from 'util';
 
-const exec = promisify(childProcess.exec);
-
 async function run(): Promise<void> {
   let testPaths: string[] = [];
 
@@ -48,7 +46,7 @@ ${changedPaths.join('\n')}
       const cp = childProcess.spawn(
         `yarn playwright test ${
           testPaths.length ? testPaths.join(' ') : './suites'
-        } --browser='all' --reporter='line' --repeat-each ${runCount}`,
+        } --reporter='line' --repeat-each ${runCount}`,
         { shell: true, cwd },
       );
 

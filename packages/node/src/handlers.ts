@@ -10,14 +10,14 @@ import {
 import type { Span } from '@sentry/types';
 import type { AddRequestDataToEventOptions } from '@sentry/utils';
 import {
+  addExceptionMechanism,
   addRequestDataToTransaction,
-  baggageHeaderToDynamicSamplingContext,
   dropUndefinedKeys,
   extractPathForTransaction,
-  extractTraceparentData,
   isString,
   logger,
   normalize,
+  tracingContextFromHeaders,
 } from '@sentry/utils';
 import type * as http from 'http';
 
@@ -53,20 +53,17 @@ export function tracingHandler(): (
       return next();
     }
 
+    const sentryTrace = req.headers && isString(req.headers['sentry-trace']) ? req.headers['sentry-trace'] : undefined;
+    const baggage = req.headers?.baggage;
+    const { traceparentData, dynamicSamplingContext, propagationContext } = tracingContextFromHeaders(
+      sentryTrace,
+      baggage,
+    );
+    hub.getScope().setPropagationContext(propagationContext);
+
     if (!hasTracingEnabled(options)) {
-      __DEBUG_BUILD__ &&
-        logger.warn(
-          'Sentry `tracingHandler` is being used, but tracing is disabled. Please enable tracing by setting ' +
-            'either `tracesSampleRate` or `tracesSampler` in your `Sentry.init()` options.',
-        );
       return next();
     }
-
-    // If there is a trace header set, we extract the data from it (parentSpanId, traceId, and sampling decision)
-    const traceparentData =
-      req.headers && isString(req.headers['sentry-trace']) && extractTraceparentData(req.headers['sentry-trace']);
-    const incomingBaggageHeaders = req.headers?.baggage;
-    const dynamicSamplingContext = baggageHeaderToDynamicSamplingContext(incomingBaggageHeaders);
 
     const [name, source] = extractPathForTransaction(req, { path: true, method: true });
     const transaction = startTransaction(
@@ -163,7 +160,7 @@ export function requestHandler(
 
     // If Scope contains a Single mode Session, it is removed in favor of using Session Aggregates mode
     const scope = currentHub.getScope();
-    if (scope && scope.getSession()) {
+    if (scope.getSession()) {
       scope.setSession();
     }
   }
@@ -304,6 +301,11 @@ export function errorHandler(options?: {
           }
         }
 
+        _scope.addEventProcessor(event => {
+          addExceptionMechanism(event, { type: 'middleware', handled: false });
+          return event;
+        });
+
         const eventId = captureException(error);
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         (res as any).sentry = eventId;
@@ -339,7 +341,7 @@ export function trpcMiddleware(options: SentryTrpcMiddlewareOptions = {}) {
   return function <T>({ path, type, next, rawInput }: TrpcMiddlewareArguments<T>): T {
     const hub = getCurrentHub();
     const clientOptions = hub.getClient()?.getOptions();
-    const sentryTransaction = hub.getScope()?.getTransaction();
+    const sentryTransaction = hub.getScope().getTransaction();
 
     if (sentryTransaction) {
       sentryTransaction.setName(`trpc/${path}`, 'route');

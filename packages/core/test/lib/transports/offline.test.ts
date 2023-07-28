@@ -98,7 +98,7 @@ const createTestTransport = (
             reject(next);
           } else {
             sendCount += 1;
-            resolve(next as TransportMakeRequestResponse | undefined);
+            resolve(next as TransportMakeRequestResponse);
           }
         });
       }),
@@ -326,6 +326,7 @@ describe('makeOfflineTransport', () => {
     expect(getCalls()).toEqual([]);
   });
 
+  // eslint-disable-next-line jest/no-disabled-tests
   it.skip(
     'Follows the Retry-After header',
     async () => {

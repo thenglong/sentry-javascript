@@ -3,12 +3,11 @@ import { captureException, startTransaction } from '@sentry/node';
 import type { Transaction } from '@sentry/types';
 import {
   addExceptionMechanism,
-  baggageHeaderToDynamicSamplingContext,
-  extractTraceparentData,
   isString,
   logger,
   objectify,
   stripUrlQueryAndFragment,
+  tracingContextFromHeaders,
 } from '@sentry/utils';
 
 import type { AugmentedNextApiRequest, AugmentedNextApiResponse, NextApiHandler } from './types';
@@ -26,7 +25,7 @@ import { autoEndTransactionOnResponseEnd, finishTransaction, flushQueue } from '
  */
 export function wrapApiHandlerWithSentry(apiHandler: NextApiHandler, parameterizedRoute: string): NextApiHandler {
   return new Proxy(apiHandler, {
-    apply: async (wrappingTarget, thisArg, args: Parameters<NextApiHandler>) => {
+    apply: (wrappingTarget, thisArg, args: Parameters<NextApiHandler>) => {
       // eslint-disable-next-line deprecation/deprecation
       return withSentry(wrappingTarget, parameterizedRoute).apply(thisArg, args);
     },
@@ -49,7 +48,7 @@ export const withSentryAPI = wrapApiHandlerWithSentry;
  */
 export function withSentry(apiHandler: NextApiHandler, parameterizedRoute?: string): NextApiHandler {
   return new Proxy(apiHandler, {
-    apply: async (wrappingTarget, thisArg, args: [AugmentedNextApiRequest, AugmentedNextApiResponse]) => {
+    apply: (wrappingTarget, thisArg, args: [AugmentedNextApiRequest, AugmentedNextApiResponse]) => {
       const [req, res] = args;
 
       // We're now auto-wrapping API route handlers using `wrapApiHandlerWithSentry` (which uses `withSentry` under the hood), but
@@ -73,15 +72,18 @@ export function withSentry(apiHandler: NextApiHandler, parameterizedRoute?: stri
             currentScope.setSDKProcessingMetadata({ request: req });
 
             if (hasTracingEnabled(options) && options?.instrumenter === 'sentry') {
-              // If there is a trace header set, extract the data from it (parentSpanId, traceId, and sampling decision)
-              let traceparentData;
-              if (req.headers && isString(req.headers['sentry-trace'])) {
-                traceparentData = extractTraceparentData(req.headers['sentry-trace']);
-                __DEBUG_BUILD__ && logger.log(`[Tracing] Continuing trace ${traceparentData?.traceId}.`);
-              }
+              const sentryTrace =
+                req.headers && isString(req.headers['sentry-trace']) ? req.headers['sentry-trace'] : undefined;
+              const baggage = req.headers?.baggage;
+              const { traceparentData, dynamicSamplingContext, propagationContext } = tracingContextFromHeaders(
+                sentryTrace,
+                baggage,
+              );
+              hub.getScope().setPropagationContext(propagationContext);
 
-              const baggageHeader = req.headers && req.headers.baggage;
-              const dynamicSamplingContext = baggageHeaderToDynamicSamplingContext(baggageHeader);
+              if (__DEBUG_BUILD__ && traceparentData) {
+                logger.log(`[Tracing] Continuing trace ${traceparentData.traceId}.`);
+              }
 
               // prefer the parameterized route, if we have it (which we will if we've auto-wrapped the route handler)
               let reqPath = parameterizedRoute;

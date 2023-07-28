@@ -49,6 +49,16 @@ export type { ExtractedNodeRequestData, HttpHeaderValue, Primitive, WorkerLocati
 export type { ClientOptions, Options } from './options';
 export type { Package } from './package';
 export type { PolymorphicEvent, PolymorphicRequest } from './polymorphics';
+export type {
+  ThreadId,
+  FrameId,
+  StackId,
+  ThreadCpuSample,
+  ThreadCpuStack,
+  ThreadCpuFrame,
+  ThreadCpuProfile,
+  Profile,
+} from './profiling';
 export type { ReplayEvent, ReplayRecordingData, ReplayRecordingMode } from './replay';
 export type { QueryParams, Request, SanitizedRequestData } from './request';
 export type { Runtime } from './runtime';
@@ -73,7 +83,7 @@ export type { Span, SpanContext } from './span';
 export type { StackFrame } from './stackframe';
 export type { Stacktrace, StackParser, StackLineParser, StackLineParserFn } from './stacktrace';
 export type { TextEncoderInternal } from './textencoder';
-export type { TracePropagationTargets } from './tracing';
+export type { PropagationContext, TracePropagationTargets } from './tracing';
 export type {
   CustomSamplingContext,
   SamplingContext,
@@ -105,5 +115,5 @@ export type { WrappedFunction } from './wrappedfunction';
 export type { Instrumenter } from './instrumenter';
 export type { HandlerDataFetch, HandlerDataXhr, SentryXhrData, SentryWrappedXMLHttpRequest } from './instrument';
 
-export type { BrowserClientReplayOptions } from './browseroptions';
+export type { BrowserClientReplayOptions, BrowserClientProfilingOptions } from './browseroptions';
 export type { CheckIn, MonitorConfig, SerializedCheckIn } from './checkin';

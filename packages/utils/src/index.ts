@@ -1,3 +1,4 @@
+export * from './aggregate-errors';
 export * from './browser';
 export * from './dsn';
 export * from './error';
@@ -28,3 +29,4 @@ export * from './ratelimit';
 export * from './baggage';
 export * from './url';
 export * from './userIntegrations';
+export * from './cache';

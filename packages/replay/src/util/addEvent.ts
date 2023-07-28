@@ -1,9 +1,14 @@
+import { EventType } from '@sentry-internal/rrweb';
 import { getCurrentHub } from '@sentry/core';
 import { logger } from '@sentry/utils';
 
-import type { AddEventResult, RecordingEvent, ReplayContainer } from '../types';
-import { EventType } from '../types/rrweb';
-import { timestampToMs } from './timestampToMs';
+import { EventBufferSizeExceededError } from '../eventBuffer/error';
+import type { AddEventResult, RecordingEvent, ReplayContainer, ReplayFrameEvent, ReplayPluginOptions } from '../types';
+import { timestampToMs } from './timestamp';
+
+function isCustomEvent(event: RecordingEvent): event is ReplayFrameEvent {
+  return event.type === EventType.Custom;
+}
 
 /**
  * Add an event to the event buffer.
@@ -41,10 +46,7 @@ export async function addEvent(
 
     const replayOptions = replay.getOptions();
 
-    const eventAfterPossibleCallback =
-      typeof replayOptions.beforeAddRecordingEvent === 'function' && event.type === EventType.Custom
-        ? replayOptions.beforeAddRecordingEvent(event)
-        : event;
+    const eventAfterPossibleCallback = maybeApplyCallback(event, replayOptions.beforeAddRecordingEvent);
 
     if (!eventAfterPossibleCallback) {
       return;
@@ -52,8 +54,10 @@ export async function addEvent(
 
     return await replay.eventBuffer.addEvent(eventAfterPossibleCallback);
   } catch (error) {
+    const reason = error && error instanceof EventBufferSizeExceededError ? 'addEventSizeExceeded' : 'addEvent';
+
     __DEBUG_BUILD__ && logger.error(error);
-    await replay.stop('addEvent');
+    await replay.stop(reason);
 
     const client = getCurrentHub().getClient();
 
@@ -61,4 +65,21 @@ export async function addEvent(
       client.recordDroppedEvent('internal_sdk_error', 'replay');
     }
   }
+}
+
+function maybeApplyCallback(
+  event: RecordingEvent,
+  callback: ReplayPluginOptions['beforeAddRecordingEvent'],
+): RecordingEvent | null | undefined {
+  try {
+    if (typeof callback === 'function' && isCustomEvent(event)) {
+      return callback(event);
+    }
+  } catch (error) {
+    __DEBUG_BUILD__ &&
+      logger.error('[Replay] An error occured in the `beforeAddRecordingEvent` callback, skipping the event...', error);
+    return null;
+  }
+
+  return event;
 }

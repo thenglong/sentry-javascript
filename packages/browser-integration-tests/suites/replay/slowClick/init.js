@@ -2,16 +2,11 @@ import * as Sentry from '@sentry/browser';
 
 window.Sentry = Sentry;
 window.Replay = new Sentry.Replay({
-  flushMinDelay: 500,
-  flushMaxDelay: 500,
-  _experiments: {
-    slowClicks: {
-      threshold: 300,
-      scrollThreshold: 300,
-      timeout: 2000,
-      ignoreSelectors: ['.ignore-class', '[ignore-attribute]'],
-    },
-  },
+  flushMinDelay: 200,
+  flushMaxDelay: 200,
+  minReplayDuration: 0,
+  slowClickTimeout: 3500,
+  slowClickIgnoreSelectors: ['.ignore-class', '[ignore-attribute]'],
 });
 
 Sentry.init({

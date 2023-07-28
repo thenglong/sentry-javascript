@@ -30,7 +30,10 @@ test('should inject `sentry-trace` and `baggage` meta tags inside a parameterize
   expect(sentryBaggageContent).toEqual(expect.any(String));
 });
 
-test('should send transactions with corresponding `sentry-trace` and `baggage` inside root page', async ({ page }) => {
+test('should send transactions with corresponding `sentry-trace` and `baggage` inside root page', async ({
+  page,
+  browserName,
+}) => {
   const envelope = await getFirstSentryEnvelopeRequest<Event>(page, '/');
 
   const sentryTraceTag = await page.$('meta[name="sentry-trace"]');

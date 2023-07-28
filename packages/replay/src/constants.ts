@@ -37,3 +37,16 @@ export const NETWORK_BODY_MAX_SIZE = 150_000;
 
 /* The max size of a single console arg that is captured. Any arg larger than this will be truncated. */
 export const CONSOLE_ARG_MAX_SIZE = 5_000;
+
+/* Min. time to wait before we consider something a slow click. */
+export const SLOW_CLICK_THRESHOLD = 3_000;
+/* For scroll actions after a click, we only look for a very short time period to detect programmatic scrolling. */
+export const SLOW_CLICK_SCROLL_TIMEOUT = 300;
+
+/** When encountering a total segment size exceeding this size, stop the replay (as we cannot properly ingest it). */
+export const REPLAY_MAX_EVENT_BUFFER_SIZE = 20_000_000; // ~20MB
+
+/** Replays must be min. 5s long before we send them. */
+export const MIN_REPLAY_DURATION = 4_999;
+/* The max. allowed value that the minReplayDuration can be set to. */
+export const MIN_REPLAY_DURATION_LIMIT = 15_000;

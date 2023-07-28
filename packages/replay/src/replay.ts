@@ -1,7 +1,7 @@
 /* eslint-disable max-lines */ // TODO: We might want to split this file up
 import { EventType, record } from '@sentry-internal/rrweb';
 import { captureException, getCurrentHub } from '@sentry/core';
-import type { Breadcrumb, ReplayRecordingMode } from '@sentry/types';
+import type { ReplayRecordingMode, Transaction } from '@sentry/types';
 import { logger } from '@sentry/utils';
 
 import {
@@ -9,8 +9,11 @@ import {
   MAX_SESSION_LIFE,
   SESSION_IDLE_EXPIRE_DURATION,
   SESSION_IDLE_PAUSE_DURATION,
+  SLOW_CLICK_SCROLL_TIMEOUT,
+  SLOW_CLICK_THRESHOLD,
   WINDOW,
 } from './constants';
+import { ClickDetector } from './coreHandlers/handleClick';
 import { handleKeyboardEvent } from './coreHandlers/handleKeyboardEvent';
 import { setupPerformanceObserver } from './coreHandlers/performanceObserver';
 import { createEventBuffer } from './eventBuffer';
@@ -21,6 +24,7 @@ import type {
   AddEventResult,
   AddUpdateCallback,
   AllPerformanceEntry,
+  BreadcrumbFrame,
   EventBuffer,
   InternalEventContext,
   PopEventContext,
@@ -30,6 +34,7 @@ import type {
   ReplayPluginOptions,
   SendBufferedReplayOptions,
   Session,
+  SlowClickConfig,
   Timeouts,
 } from './types';
 import { addEvent } from './util/addEvent';
@@ -59,6 +64,8 @@ export class ReplayContainer implements ReplayContainerInterface {
 
   public session: Session | undefined;
 
+  public clickDetector: ClickDetector | undefined;
+
   /**
    * Recording can happen in one of three modes:
    *   - session: Record the whole session, sending it continuously
@@ -67,6 +74,12 @@ export class ReplayContainer implements ReplayContainerInterface {
    *     - or calling `flush()` to send the replay
    */
   public recordingMode: ReplayRecordingMode = 'session';
+
+  /**
+   * The current or last active transcation.
+   * This is only available when performance is enabled.
+   */
+  public lastTransaction?: Transaction;
 
   /**
    * These are here so we can overwrite them in tests etc.
@@ -152,6 +165,21 @@ export class ReplayContainer implements ReplayContainerInterface {
       // ... per 5s
       5,
     );
+
+    const { slowClickTimeout, slowClickIgnoreSelectors } = this.getOptions();
+
+    const slowClickConfig: SlowClickConfig | undefined = slowClickTimeout
+      ? {
+          threshold: Math.min(SLOW_CLICK_THRESHOLD, slowClickTimeout),
+          timeout: slowClickTimeout,
+          scrollTimeout: SLOW_CLICK_SCROLL_TIMEOUT,
+          ignoreSelector: slowClickIgnoreSelectors ? slowClickIgnoreSelectors.join(',') : '',
+        }
+      : undefined;
+
+    if (slowClickConfig) {
+      this.clickDetector = new ClickDetector(this, slowClickConfig);
+    }
   }
 
   /** Get the event context. */
@@ -396,6 +424,12 @@ export class ReplayContainer implements ReplayContainerInterface {
       return this.flushImmediate();
     }
 
+    const activityTime = Date.now();
+
+    // eslint-disable-next-line no-console
+    const log = this.getOptions()._experiments.traceInternals ? console.info : logger.info;
+    __DEBUG_BUILD__ && log(`[Replay] Converting buffer to session, starting at ${activityTime}`);
+
     // Allow flush to complete before resuming as a session recording, otherwise
     // the checkout from `startRecording` may be included in the payload.
     // Prefer to keep the error replay as a separate (and smaller) segment
@@ -417,6 +451,18 @@ export class ReplayContainer implements ReplayContainerInterface {
     // Once this session ends, we do not want to refresh it
     if (this.session) {
       this.session.shouldRefresh = false;
+
+      // It's possible that the session lifespan is > max session lifespan
+      // because we have been buffering beyond max session lifespan (we ignore
+      // expiration given that `shouldRefresh` is true). Since we flip
+      // `shouldRefresh`, the session could be considered expired due to
+      // lifespan, which is not what we want. Update session start date to be
+      // the current timestamp, so that session is not considered to be
+      // expired. This means that max replay duration can be MAX_SESSION_LIFE +
+      // (length of buffer), which we are ok with.
+      this._updateUserActivity(activityTime);
+      this._updateSessionActivity(activityTime);
+      this.session.started = activityTime;
       this._maybeSaveSession();
     }
 
@@ -481,6 +527,18 @@ export class ReplayContainer implements ReplayContainerInterface {
   }
 
   /**
+   * Updates the user activity timestamp *without* resuming
+   * recording. Some user events (e.g. keydown) can be create
+   * low-value replays that only contain the keypress as a
+   * breadcrumb. Instead this would require other events to
+   * create a new replay after a session has expired.
+   */
+  public updateUserActivity(): void {
+    this._updateUserActivity();
+    this._updateSessionActivity();
+  }
+
+  /**
    * Only flush if `this.recordingMode === 'session'`
    */
   public conditionalFlush(): Promise<void> {
@@ -489,6 +547,13 @@ export class ReplayContainer implements ReplayContainerInterface {
     }
 
     return this.flushImmediate();
+  }
+
+  /**
+   * Flush using debounce flush
+   */
+  public flush(): Promise<void> {
+    return this._debouncedFlush() as Promise<void>;
   }
 
   /**
@@ -615,6 +680,19 @@ export class ReplayContainer implements ReplayContainerInterface {
   }
 
   /**
+   * This will get the parametrized route name of the current page.
+   * This is only available if performance is enabled, and if an instrumented router is used.
+   */
+  public getCurrentRoute(): string | undefined {
+    const lastTransaction = this.lastTransaction || getCurrentHub().getScope().getTransaction();
+    if (!lastTransaction || !['route', 'custom'].includes(lastTransaction.metadata.source)) {
+      return undefined;
+    }
+
+    return lastTransaction.name;
+  }
+
+  /**
    * Initialize and start all listeners to varying events (DOM,
    * Performance Observer, Recording, Sentry SDK, etc)
    */
@@ -657,7 +735,7 @@ export class ReplayContainer implements ReplayContainerInterface {
       stickySession: Boolean(this._options.stickySession),
       currentSession: this.session,
       sessionSampleRate: this._options.sessionSampleRate,
-      allowBuffering: this._options.errorSampleRate > 0,
+      allowBuffering: this._options.errorSampleRate > 0 || this.recordingMode === 'buffer',
     });
 
     // If session was newly created (i.e. was not loaded from storage), then
@@ -691,6 +769,10 @@ export class ReplayContainer implements ReplayContainerInterface {
       WINDOW.addEventListener('focus', this._handleWindowFocus);
       WINDOW.addEventListener('keydown', this._handleKeyboardEvent);
 
+      if (this.clickDetector) {
+        this.clickDetector.addListeners();
+      }
+
       // There is no way to remove these listeners, so ensure they are only added once
       if (!this._hasInitializedCoreListeners) {
         addGlobalListeners(this);
@@ -719,6 +801,10 @@ export class ReplayContainer implements ReplayContainerInterface {
       WINDOW.removeEventListener('blur', this._handleWindowBlur);
       WINDOW.removeEventListener('focus', this._handleWindowFocus);
       WINDOW.removeEventListener('keydown', this._handleKeyboardEvent);
+
+      if (this.clickDetector) {
+        this.clickDetector.removeListeners();
+      }
 
       if (this._performanceObserver) {
         this._performanceObserver.disconnect();
@@ -777,7 +863,7 @@ export class ReplayContainer implements ReplayContainerInterface {
   /**
    * Tasks to run when we consider a page to be hidden (via blurring and/or visibility)
    */
-  private _doChangeToBackgroundTasks(breadcrumb?: Breadcrumb): void {
+  private _doChangeToBackgroundTasks(breadcrumb?: BreadcrumbFrame): void {
     if (!this.session) {
       return;
     }
@@ -797,7 +883,7 @@ export class ReplayContainer implements ReplayContainerInterface {
   /**
    * Tasks to run when we consider a page to be visible (via focus and/or visibility)
    */
-  private _doChangeToForegroundTasks(breadcrumb?: Breadcrumb): void {
+  private _doChangeToForegroundTasks(breadcrumb?: BreadcrumbFrame): void {
     if (!this.session) {
       return;
     }
@@ -850,7 +936,7 @@ export class ReplayContainer implements ReplayContainerInterface {
   /**
    * Helper to create (and buffer) a replay breadcrumb from a core SDK breadcrumb
    */
-  private _createCustomBreadcrumb(breadcrumb: Breadcrumb): void {
+  private _createCustomBreadcrumb(breadcrumb: BreadcrumbFrame): void {
     this.addUpdate(() => {
       void this.throttledAddEvent({
         type: EventType.Custom,
@@ -1018,6 +1104,23 @@ export class ReplayContainer implements ReplayContainerInterface {
       return;
     }
 
+    const start = this.session.started;
+    const now = Date.now();
+    const duration = now - start;
+
+    // If session is too short, or too long (allow some wiggle room over maxSessionLife), do not send it
+    // This _should_ not happen, but it may happen if flush is triggered due to a page activity change or similar
+    if (duration < this._options.minReplayDuration || duration > this.timeouts.maxSessionLife + 5_000) {
+      // eslint-disable-next-line no-console
+      const log = this.getOptions()._experiments.traceInternals ? console.warn : logger.warn;
+      __DEBUG_BUILD__ &&
+        log(
+          `[Replay] Session duration (${Math.floor(duration / 1000)}s) is too short or too long, not sending replay.`,
+        );
+
+      return;
+    }
+
     // A flush is about to happen, cancel any queued flushes
     this._debouncedFlush.cancel();
 
@@ -1056,8 +1159,8 @@ export class ReplayContainer implements ReplayContainerInterface {
   private _onMutationHandler = (mutations: unknown[]): boolean => {
     const count = mutations.length;
 
-    const mutationLimit = this._options._experiments.mutationLimit || 0;
-    const mutationBreadcrumbLimit = this._options._experiments.mutationBreadcrumbLimit || 1000;
+    const mutationLimit = this._options.mutationLimit;
+    const mutationBreadcrumbLimit = this._options.mutationBreadcrumbLimit;
     const overMutationLimit = mutationLimit && count > mutationLimit;
 
     // Create a breadcrumb if a lot of mutations happen at the same time
@@ -1067,15 +1170,15 @@ export class ReplayContainer implements ReplayContainerInterface {
         category: 'replay.mutations',
         data: {
           count,
+          limit: overMutationLimit,
         },
       });
       this._createCustomBreadcrumb(breadcrumb);
     }
 
+    // Stop replay if over the mutation limit
     if (overMutationLimit) {
-      // We want to skip doing an incremental snapshot if there are too many mutations
-      // Instead, we do a full snapshot
-      this._triggerFullSnapshot(false);
+      void this.stop('mutationLimit');
       return false;
     }
 

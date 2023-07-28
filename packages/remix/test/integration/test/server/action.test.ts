@@ -1,5 +1,7 @@
 import { assertSentryTransaction, assertSentryEvent, RemixTestEnv } from './utils/helpers';
 
+const useV2 = process.env.REMIX_VERSION === '2';
+
 jest.spyOn(console, 'error').mockImplementation();
 
 // Repeat tests for each adapter
@@ -11,10 +13,10 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
     const transaction = envelope[2];
 
     assertSentryTransaction(transaction, {
-      transaction: 'routes/action-json-response/$id',
+      transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       spans: [
         {
-          description: 'routes/action-json-response/$id',
+          description: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
           op: 'function.remix.action',
         },
         {
@@ -22,11 +24,11 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
           op: 'function.remix.loader',
         },
         {
-          description: 'routes/action-json-response/$id',
+          description: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
           op: 'function.remix.loader',
         },
         {
-          description: 'routes/action-json-response/$id',
+          description: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
           op: 'function.remix.document_request',
         },
       ],
@@ -36,7 +38,7 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
         cookies: expect.any(Object),
         headers: {
           'user-agent': expect.any(String),
-          host: 'localhost:8000',
+          host: expect.stringContaining('localhost:'),
         },
       },
     });
@@ -63,6 +65,9 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
           tags: {
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
     });
@@ -76,7 +81,7 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'action',
+                function: useV2 ? 'remix.server' : 'action',
               },
               handled: true,
               type: 'instrument',
@@ -102,14 +107,14 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
     const [event] = envelopes.filter(envelope => envelope[1].type === 'event');
 
     assertSentryTransaction(transaction[2], {
-      transaction: 'routes/action-json-response/$id',
+      transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       request: {
         method: 'POST',
         url,
         cookies: expect.any(Object),
         headers: {
           'user-agent': expect.any(String),
-          host: 'localhost:8000',
+          host: expect.stringContaining('localhost:'),
         },
       },
     });
@@ -129,7 +134,7 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
         cookies: expect.any(Object),
         headers: {
           'user-agent': expect.any(String),
-          host: 'localhost:8000',
+          host: expect.stringContaining('localhost:'),
         },
       },
     });
@@ -158,10 +163,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'POST',
             'http.status_code': '302',
           },
+          data: {
+            'http.response.status_code': 302,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -174,10 +182,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'GET',
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -186,11 +197,11 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
         values: [
           {
             type: 'Error',
-            value: 'Unexpected Server Error from Loader',
+            value: 'Unexpected Server Error',
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'loader',
+                function: useV2 ? 'remix.server' : 'loader',
               },
               handled: true,
               type: 'instrument',
@@ -224,10 +235,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'POST',
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -240,7 +254,7 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'action',
+                function: useV2 ? 'ErrorResponse' : 'action',
               },
               handled: true,
               type: 'instrument',
@@ -274,10 +288,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'POST',
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -286,11 +303,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
         values: [
           {
             type: 'Error',
-            value: 'Non-Error exception captured with keys: data',
+            value: useV2
+              ? 'Non-Error exception captured with keys: data, internal, status, statusText'
+              : 'Non-Error exception captured with keys: data',
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'action',
+                function: useV2 ? 'ErrorResponse' : 'action',
               },
               handled: true,
               type: 'instrument',
@@ -324,10 +343,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'POST',
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -340,7 +362,7 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'action',
+                function: useV2 ? 'ErrorResponse' : 'action',
               },
               handled: true,
               type: 'instrument',
@@ -374,10 +396,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
             method: 'POST',
             'http.status_code': '500',
           },
+          data: {
+            'http.response.status_code': 500,
+          },
         },
       },
       tags: {
-        transaction: 'routes/action-json-response/$id',
+        transaction: `routes/action-json-response${useV2 ? '.' : '/'}$id`,
       },
     });
 
@@ -386,11 +411,13 @@ describe.each(['builtin', 'express'])('Remix API Actions with adapter = %s', ada
         values: [
           {
             type: 'Error',
-            value: 'Non-Error exception captured with keys: [object has no keys]',
+            value: useV2
+              ? 'Non-Error exception captured with keys: data, internal, status, statusText'
+              : 'Non-Error exception captured with keys: [object has no keys]',
             stacktrace: expect.any(Object),
             mechanism: {
               data: {
-                function: 'action',
+                function: useV2 ? 'ErrorResponse' : 'action',
               },
               handled: true,
               type: 'instrument',

@@ -44,7 +44,7 @@ describe('Hub', () => {
         scope.setSpan(transaction);
       });
 
-      expect(hub.getScope()?.getTransaction()).toBe(transaction);
+      expect(hub.getScope().getTransaction()).toBe(transaction);
     });
 
     it('should find a transaction which has been set on the scope if sampled = false', () => {
@@ -57,7 +57,7 @@ describe('Hub', () => {
         scope.setSpan(transaction);
       });
 
-      expect(hub.getScope()?.getTransaction()).toBe(transaction);
+      expect(hub.getScope().getTransaction()).toBe(transaction);
     });
 
     it("should not find an open transaction if it's not on the scope", () => {
@@ -66,7 +66,7 @@ describe('Hub', () => {
       makeMain(hub);
       hub.startTransaction({ name: 'dogpark' });
 
-      expect(hub.getScope()?.getTransaction()).toBeUndefined();
+      expect(hub.getScope().getTransaction()).toBeUndefined();
     });
   });
 
@@ -622,6 +622,29 @@ The transaction will not be sampled. Please use the otel instrumentation to star
 
         expect(transaction.sampled).not.toBe(parentSamplingDecsion);
       });
+    });
+  });
+
+  describe('trimming transaction', () => {
+    describe('it should trim a transaction to the span timestamp if trimEnd is true', () => {
+      const options = getDefaultBrowserClientOptions({
+        tracesSampleRate: 1,
+        dsn: 'https://username@domain/123',
+      });
+      const client = new BrowserClient(options);
+      const hub = new Hub(client);
+
+      const captureEventSpy = jest.spyOn(hub, 'captureEvent');
+
+      makeMain(hub);
+      const transaction = hub.startTransaction({ name: 'dogpark', startTimestamp: 1000, trimEnd: true });
+
+      transaction.startChild({ op: 'test', startTimestamp: 1200, endTimestamp: 1500 });
+
+      transaction.finish(2000);
+
+      expect(captureEventSpy).toHaveBeenCalledTimes(1);
+      expect(captureEventSpy.mock.calls[0][0].timestamp).toEqual(1500);
     });
   });
 });

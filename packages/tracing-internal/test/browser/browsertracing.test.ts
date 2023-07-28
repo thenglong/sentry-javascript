@@ -7,7 +7,7 @@ import { JSDOM } from 'jsdom';
 
 import type { IdleTransaction } from '../../../tracing/src';
 import { getActiveTransaction } from '../../../tracing/src';
-import { getDefaultBrowserClientOptions } from '../../../tracing/test/testutils';
+import { conditionalTest, getDefaultBrowserClientOptions } from '../../../tracing/test/testutils';
 import type { BrowserTracingOptions } from '../../src/browser/browsertracing';
 import { BrowserTracing, getMetaContent } from '../../src/browser/browsertracing';
 import { defaultRequestInstrumentationOptions } from '../../src/browser/request';
@@ -58,7 +58,7 @@ beforeAll(() => {
   WINDOW.location = dom.window.location;
 });
 
-describe('BrowserTracing', () => {
+conditionalTest({ min: 10 })('BrowserTracing', () => {
   let hub: Hub;
   beforeEach(() => {
     jest.useFakeTimers();
@@ -94,8 +94,8 @@ describe('BrowserTracing', () => {
     const browserTracing = createBrowserTracing();
 
     expect(browserTracing.options).toEqual({
-      _experiments: {},
       enableLongTask: true,
+      _experiments: {},
       ...TRACING_DEFAULTS,
       markBackgroundTransactions: true,
       routingInstrumentation: instrumentRoutingWithDefaults,
@@ -113,9 +113,6 @@ describe('BrowserTracing', () => {
     });
 
     expect(browserTracing.options).toEqual({
-      _experiments: {
-        enableLongTask: false,
-      },
       enableLongTask: false,
       ...TRACING_DEFAULTS,
       markBackgroundTransactions: true,
@@ -123,6 +120,9 @@ describe('BrowserTracing', () => {
       startTransactionOnLocationChange: true,
       startTransactionOnPageLoad: true,
       ...defaultRequestInstrumentationOptions,
+      _experiments: {
+        enableLongTask: false,
+      },
     });
   });
 
@@ -132,8 +132,8 @@ describe('BrowserTracing', () => {
     });
 
     expect(browserTracing.options).toEqual({
-      _experiments: {},
       enableLongTask: false,
+      _experiments: {},
       ...TRACING_DEFAULTS,
       markBackgroundTransactions: true,
       routingInstrumentation: instrumentRoutingWithDefaults,
@@ -248,8 +248,69 @@ describe('BrowserTracing', () => {
           traceFetch: true,
           traceXHR: true,
           tracePropagationTargets: ['something'],
+          enableHTTPTimings: true,
         });
       });
+
+      it('uses `tracePropagationTargets` set by client over integration set targets', () => {
+        jest.clearAllMocks();
+        hub.getClient()!.getOptions().tracePropagationTargets = ['something-else'];
+        const sampleTracePropagationTargets = ['something'];
+        createBrowserTracing(true, {
+          routingInstrumentation: customInstrumentRouting,
+          tracePropagationTargets: sampleTracePropagationTargets,
+        });
+
+        expect(instrumentOutgoingRequestsMock).toHaveBeenCalledWith({
+          enableHTTPTimings: true,
+          traceFetch: true,
+          traceXHR: true,
+          tracePropagationTargets: ['something-else'],
+        });
+      });
+
+      it.each([
+        [true, 'tracePropagationTargets', 'defined', { tracePropagationTargets: ['something'] }],
+        [false, 'tracePropagationTargets', 'undefined', { tracePropagationTargets: undefined }],
+        [true, 'tracingOrigins', 'defined', { tracingOrigins: ['something'] }],
+        [false, 'tracingOrigins', 'undefined', { tracingOrigins: undefined }],
+        [
+          true,
+          'tracePropagationTargets and tracingOrigins',
+          'defined',
+          { tracePropagationTargets: ['something'], tracingOrigins: ['something-else'] },
+        ],
+        [
+          false,
+          'tracePropagationTargets and tracingOrigins',
+          'undefined',
+          { tracePropagationTargets: undefined, tracingOrigins: undefined },
+        ],
+        [
+          true,
+          'tracePropagationTargets and tracingOrigins',
+          'defined and undefined',
+          { tracePropagationTargets: ['something'], tracingOrigins: undefined },
+        ],
+        [
+          true,
+          'tracePropagationTargets and tracingOrigins',
+          'undefined and defined',
+          { tracePropagationTargets: undefined, tracingOrigins: ['something'] },
+        ],
+      ])(
+        'sets `_hasSetTracePropagationTargets` to %s if %s is %s',
+        (hasSet: boolean, _: string, __: string, options: Partial<BrowserTracingOptions>) => {
+          jest.clearAllMocks();
+          const inst = createBrowserTracing(true, {
+            routingInstrumentation: customInstrumentRouting,
+            ...options,
+          });
+
+          // @ts-ignore accessing private property
+          expect(inst._hasSetTracePropagationTargets).toBe(hasSet);
+        },
+      );
     });
 
     describe('beforeNavigate', () => {
@@ -487,7 +548,7 @@ describe('BrowserTracing', () => {
         document.head.innerHTML = '<meta name="cat-cafe">';
 
         const metaTagValue = getMetaContent('dogpark');
-        expect(metaTagValue).toBe(null);
+        expect(metaTagValue).toBe(undefined);
       });
 
       it('can pick the correct tag out of multiple options', () => {
@@ -577,6 +638,7 @@ describe('BrowserTracing', () => {
           release: '1.0.0',
           environment: 'production',
           public_key: 'pubKey',
+          sampled: 'false',
           trace_id: expect.not.stringMatching('12312012123120121231201212312012'),
         });
       });

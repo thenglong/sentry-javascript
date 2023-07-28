@@ -5,6 +5,8 @@ import * as SentryUtils from '@sentry/utils';
 import type { Replay } from '../../src';
 import type { ReplayContainer } from '../../src/replay';
 import { clearSession } from '../../src/session/clearSession';
+import { createPerformanceEntries } from '../../src/util/createPerformanceEntries';
+import { createPerformanceSpans } from '../../src/util/createPerformanceSpans';
 import * as SendReplayRequest from '../../src/util/sendReplayRequest';
 import { BASE_TIMESTAMP, mockRrweb, mockSdk } from '../index';
 import { useFakeTimers } from '../utils/use-fake-timers';
@@ -37,7 +39,11 @@ describe('Integration | beforeAddRecordingEvent', () => {
     ({ replay, integration } = await mockSdk({
       replayOptions: {
         beforeAddRecordingEvent: event => {
-          const eventData = event.data as Record<string, any>;
+          const eventData = event.data;
+
+          if (eventData.tag === 'performanceSpan') {
+            throw new Error('test error in callback');
+          }
 
           if (eventData.tag === 'breadcrumb' && eventData.payload.category === 'ui.click') {
             return {
@@ -50,12 +56,6 @@ describe('Integration | beforeAddRecordingEvent', () => {
                 },
               },
             };
-          }
-
-          // This should not do anything because callback should not be called
-          // for `event.type != 5`
-          if (event.type === 2) {
-            return null;
           }
 
           if (eventData.tag === 'options') {
@@ -141,5 +141,43 @@ describe('Integration | beforeAddRecordingEvent', () => {
       recordingPayloadHeader: { segment_id: 0 },
       recordingData: JSON.stringify([{ data: { isCheckout: true }, timestamp: BASE_TIMESTAMP, type: 2 }]),
     });
+  });
+
+  it('handles error in callback', async () => {
+    createPerformanceSpans(
+      replay,
+      createPerformanceEntries([
+        {
+          name: 'https://sentry.io/foo.js',
+          entryType: 'resource',
+          startTime: 176.59999990463257,
+          duration: 5.600000023841858,
+          initiatorType: 'link',
+          nextHopProtocol: 'h2',
+          workerStart: 177.5,
+          redirectStart: 0,
+          redirectEnd: 0,
+          fetchStart: 177.69999992847443,
+          domainLookupStart: 177.69999992847443,
+          domainLookupEnd: 177.69999992847443,
+          connectStart: 177.69999992847443,
+          connectEnd: 177.69999992847443,
+          secureConnectionStart: 177.69999992847443,
+          requestStart: 177.5,
+          responseStart: 181,
+          responseEnd: 182.19999992847443,
+          transferSize: 0,
+          encodedBodySize: 0,
+          decodedBodySize: 0,
+          serverTiming: [],
+        } as unknown as PerformanceResourceTiming,
+      ]),
+    );
+
+    jest.runAllTimers();
+    await new Promise(process.nextTick);
+
+    expect(replay).not.toHaveLastSentReplay();
+    expect(replay.isEnabled()).toBe(true);
   });
 });

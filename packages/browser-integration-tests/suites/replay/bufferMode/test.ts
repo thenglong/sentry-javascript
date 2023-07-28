@@ -16,8 +16,8 @@ import {
 sentryTest(
   '[buffer-mode] manually start buffer mode and capture buffer',
   async ({ getLocalTestPath, page, browserName }) => {
-    // This was sometimes flaky on firefox/webkit, so skipping for now
-    if (shouldSkipReplayTest() || ['firefox', 'webkit'].includes(browserName)) {
+    // This was sometimes flaky on webkit, so skipping for now
+    if (shouldSkipReplayTest() || browserName === 'webkit') {
       sentryTest.skip();
     }
 
@@ -25,7 +25,6 @@ sentryTest(
     let errorEventId: string | undefined;
     const reqPromise0 = waitForReplayRequest(page, 0);
     const reqPromise1 = waitForReplayRequest(page, 1);
-    const reqPromise2 = waitForReplayRequest(page, 2);
     const reqErrorPromise = waitForErrorRequest(page);
 
     await page.route('https://dsn.ingest.sentry.io/**/*', route => {
@@ -101,17 +100,13 @@ sentryTest(
 
     // Switches to session mode and then goes to background
     const req1 = await reqPromise1;
-    const req2 = await reqPromise2;
-    expect(callsToSentry).toBeGreaterThanOrEqual(5);
+    expect(callsToSentry).toBeGreaterThanOrEqual(4);
 
     const event0 = getReplayEvent(req0);
     const content0 = getReplayRecordingContent(req0);
 
     const event1 = getReplayEvent(req1);
     const content1 = getReplayRecordingContent(req1);
-
-    const event2 = getReplayEvent(req2);
-    const content2 = getReplayRecordingContent(req2);
 
     expect(event0).toEqual(
       getExpectedReplayEvent({
@@ -157,25 +152,15 @@ sentryTest(
 
     // From switching to session mode
     expect(content1.fullSnapshots).toHaveLength(1);
-
-    expect(event2).toEqual(
-      getExpectedReplayEvent({
-        replay_type: 'buffer', // although we're in session mode, we still send 'buffer' as replay_type
-        segment_id: 2,
-        urls: [],
-      }),
-    );
-
-    expect(content2.fullSnapshots).toHaveLength(0);
-    expect(content2.breadcrumbs).toEqual(expect.arrayContaining([expectedClickBreadcrumb]));
+    expect(content1.breadcrumbs).toEqual(expect.arrayContaining([expectedClickBreadcrumb]));
   },
 );
 
 sentryTest(
   '[buffer-mode] manually start buffer mode and capture buffer, but do not continue as session',
   async ({ getLocalTestPath, page, browserName }) => {
-    // This was sometimes flaky on firefox/webkit, so skipping for now
-    if (shouldSkipReplayTest() || ['firefox', 'webkit'].includes(browserName)) {
+    // This was sometimes flaky on webkit, so skipping for now
+    if (shouldSkipReplayTest() || browserName === 'webkit') {
       sentryTest.skip();
     }
 
@@ -302,8 +287,7 @@ sentryTest(
 sentryTest(
   '[buffer-mode] can sample on each error event',
   async ({ getLocalTestPath, page, browserName, enableConsole }) => {
-    // This was sometimes flaky on firefox/webkit, so skipping for now
-    if (shouldSkipReplayTest() || ['firefox', 'webkit'].includes(browserName)) {
+    if (shouldSkipReplayTest() || browserName === 'webkit') {
       sentryTest.skip();
     }
 

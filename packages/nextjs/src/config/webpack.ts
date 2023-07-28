@@ -1,8 +1,8 @@
 /* eslint-disable complexity */
 /* eslint-disable max-lines */
 import { getSentryRelease } from '@sentry/node';
-import { arrayify, dropUndefinedKeys, escapeStringForRegex, logger, stringMatchesSomePattern } from '@sentry/utils';
-import { default as SentryWebpackPlugin } from '@sentry/webpack-plugin';
+import { arrayify, dropUndefinedKeys, escapeStringForRegex, loadModule, logger } from '@sentry/utils';
+import type SentryCliPlugin from '@sentry/webpack-plugin';
 import * as chalk from 'chalk';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -110,7 +110,7 @@ export function constructWebpackConfigFunction(
       appDirPath = path.join(projectDir, 'src', 'app');
     }
 
-    const apiRoutesPath = path.join(pagesDirPath, 'api', '/');
+    const apiRoutesPath = path.join(pagesDirPath, 'api');
 
     const middlewareJsPath = path.join(pagesDirPath, '..', 'middleware.js');
     const middlewareTsPath = path.join(pagesDirPath, '..', 'middleware.ts');
@@ -148,8 +148,8 @@ export function constructWebpackConfigFunction(
         test: resourcePath => {
           const normalizedAbsoluteResourcePath = normalizeLoaderResourcePath(resourcePath);
           return (
-            normalizedAbsoluteResourcePath.startsWith(pagesDirPath) &&
-            !normalizedAbsoluteResourcePath.startsWith(apiRoutesPath) &&
+            normalizedAbsoluteResourcePath.startsWith(pagesDirPath + path.sep) &&
+            !normalizedAbsoluteResourcePath.startsWith(apiRoutesPath + path.sep) &&
             dotPrefixedPageExtensions.some(ext => normalizedAbsoluteResourcePath.endsWith(ext))
           );
         },
@@ -180,8 +180,7 @@ export function constructWebpackConfigFunction(
           }
         }
       } catch (e) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (e.code === 'ENOENT') {
+        if ((e as { code: string }).code === 'ENOENT') {
           // noop if file does not exist
         } else {
           // log but noop
@@ -194,7 +193,7 @@ export function constructWebpackConfigFunction(
         test: resourcePath => {
           const normalizedAbsoluteResourcePath = normalizeLoaderResourcePath(resourcePath);
           return (
-            normalizedAbsoluteResourcePath.startsWith(apiRoutesPath) &&
+            normalizedAbsoluteResourcePath.startsWith(apiRoutesPath + path.sep) &&
             dotPrefixedPageExtensions.some(ext => normalizedAbsoluteResourcePath.endsWith(ext))
           );
         },
@@ -239,7 +238,7 @@ export function constructWebpackConfigFunction(
           // ".js, .jsx, or .tsx file extensions can be used for Pages"
           // https://beta.nextjs.org/docs/routing/pages-and-layouts#pages:~:text=.js%2C%20.jsx%2C%20or%20.tsx%20file%20extensions%20can%20be%20used%20for%20Pages.
           return (
-            normalizedAbsoluteResourcePath.startsWith(appDirPath) &&
+            normalizedAbsoluteResourcePath.startsWith(appDirPath + path.sep) &&
             !!normalizedAbsoluteResourcePath.match(/[\\/](page|layout|loading|head|not-found)\.(js|jsx|tsx)$/)
           );
         },
@@ -314,12 +313,16 @@ export function constructWebpackConfigFunction(
         // without, the option to use `hidden-source-map` only applies to the client-side build.
         newConfig.devtool = userSentryOptions.hideSourceMaps && !isServer ? 'hidden-source-map' : 'source-map';
 
-        newConfig.plugins = newConfig.plugins || [];
-        newConfig.plugins.push(
-          new SentryWebpackPlugin(
-            getWebpackPluginOptions(buildContext, userSentryWebpackPluginOptions, userSentryOptions),
-          ),
-        );
+        const SentryWebpackPlugin = loadModule<SentryCliPlugin>('@sentry/webpack-plugin');
+        if (SentryWebpackPlugin) {
+          newConfig.plugins = newConfig.plugins || [];
+          newConfig.plugins.push(
+            // @ts-expect-error - this exists, the dynamic import just doesn't know about it
+            new SentryWebpackPlugin(
+              getWebpackPluginOptions(buildContext, userSentryWebpackPluginOptions, userSentryOptions),
+            ),
+          );
+        }
       }
     }
 
@@ -441,7 +444,7 @@ async function addSentryToEntryProperty(
 
   // inject into all entry points which might contain user's code
   for (const entryPointName in newEntryProperty) {
-    if (shouldAddSentryToEntryPoint(entryPointName, runtime, userSentryOptions.excludeServerRoutes ?? [])) {
+    if (shouldAddSentryToEntryPoint(entryPointName, runtime)) {
       addFilesToExistingEntryPoint(newEntryProperty, entryPointName, filesToInject);
     } else {
       if (
@@ -589,39 +592,13 @@ function checkWebpackPluginOverrides(
  * @param excludeServerRoutes A list of excluded serverside entrypoints provided by the user
  * @returns `true` if sentry code should be injected, and `false` otherwise
  */
-function shouldAddSentryToEntryPoint(
-  entryPointName: string,
-  runtime: 'node' | 'browser' | 'edge',
-  excludeServerRoutes: Array<string | RegExp>,
-): boolean {
-  // On the server side, by default we inject the `Sentry.init()` code into every page (with a few exceptions).
-  if (runtime === 'node') {
-    // User-specified pages to skip. (Note: For ease of use, `excludeServerRoutes` is specified in terms of routes,
-    // which don't have the `pages` prefix.)
-    const entryPointRoute = entryPointName.replace(/^pages/, '');
-    if (stringMatchesSomePattern(entryPointRoute, excludeServerRoutes, true)) {
-      return false;
-    }
-
-    // This expression will implicitly include `pages/_app` which is called for all serverside routes and pages
-    // regardless whether or not the user has a`_app` file.
-    return entryPointName.startsWith('pages/');
-  } else if (runtime === 'browser') {
-    return (
-      // entrypoint for `/pages` pages - this is included on all clientside pages
-      // It's important that we inject the SDK into this file and not into 'main' because in 'main'
-      // some important Next.js code (like the setup code for getCongig()) is located and some users
-      // may need this code inside their Sentry configs
-      entryPointName === 'pages/_app' ||
+function shouldAddSentryToEntryPoint(entryPointName: string, runtime: 'node' | 'browser' | 'edge'): boolean {
+  return (
+    runtime === 'browser' &&
+    (entryPointName === 'pages/_app' ||
       // entrypoint for `/app` pages
-      entryPointName === 'main-app'
-    );
-  } else {
-    // User-specified pages to skip. (Note: For ease of use, `excludeServerRoutes` is specified in terms of routes,
-    // which don't have the `pages` prefix.)
-    const entryPointRoute = entryPointName.replace(/^pages/, '');
-    return !stringMatchesSomePattern(entryPointRoute, excludeServerRoutes, true);
-  }
+      entryPointName === 'main-app')
+  );
 }
 
 /**
@@ -794,7 +771,10 @@ function shouldEnableWebpackPlugin(buildContext: BuildContext, userSentryOptions
   // architecture-specific version of the `sentry-cli` binary. If `yarn install`, `npm install`, or `npm ci` are run
   // with the `--ignore-scripts` option, this will be blocked and the missing binary will cause an error when users
   // try to build their apps.
-  if (!SentryWebpackPlugin.cliBinaryExists()) {
+  const SentryWebpackPlugin = loadModule<SentryCliPlugin>('@sentry/webpack-plugin');
+
+  // @ts-expect-error - this exists, the dynamic import just doesn't know it
+  if (!SentryWebpackPlugin || !SentryWebpackPlugin.cliBinaryExists()) {
     // eslint-disable-next-line no-console
     console.error(
       `${chalk.red('error')} - ${chalk.bold('Sentry CLI binary not found.')} Source maps will not be uploaded.\n`,
@@ -892,7 +872,10 @@ function addValueInjectionLoader(
 
   const isomorphicValues = {
     // `rewritesTunnel` set by the user in Next.js config
-    __sentryRewritesTunnelPath__: userSentryOptions.tunnelRoute,
+    __sentryRewritesTunnelPath__:
+      userSentryOptions.tunnelRoute !== undefined && userNextConfig.output !== 'export'
+        ? `${userNextConfig.basePath ?? ''}${userSentryOptions.tunnelRoute}`
+        : undefined,
 
     // The webpack plugin's release injection breaks the `app` directory so we inject the release manually here instead.
     // Having a release defined in dev-mode spams releases in Sentry so we only set one in non-dev mode
